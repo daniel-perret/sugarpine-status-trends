@@ -1,0 +1,232 @@
+---
+title: "Ch4_revised"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      include=TRUE,
+                      messages=FALSE,
+                      warnings=FALSE)
+
+library(raster)
+library(ecospat)
+library(rgeos)
+library(rgdal)
+library(adehabitatHR)
+library(sp)
+library(maptools)
+library(dplyr)
+
+'%!in%' <- function(x,y)!('%in%'(x,y))
+```
+
+In this document, I'll generate figures that delineated targeted sampling areas in New Zealand for PIPO, PICO, and PSME. To do this, I'll take a similar approach to my previous work -- delineate the native niche using conifer database occurrences, delineate the non-native novel niche using herbarium records, map the mismatch at high resolution in New Zealand. I'll divide up the NZ novel climate space into zones that I'd like to target based on their climatic characteristics -- ideally, I'd have sites that are both inside the native niche and outside the native niche.
+
+To keep things simple, I'll work in an easy MAT-AP climate space. I have to use CHELSA data, because the topoclimatic complexity of New Zealand isn't reflected well in WorldClim data.
+
+## setting up climate data (CHELSA)
+```{r CHELSA}
+# here are the basic global rasters
+clim.ras <- stack("CHELSA_bio10_01.tif","CHELSA_bio10_12.tif")
+names(clim.ras) <- c("bio01","bio12")
+
+#clim.ras <- raster::scale(clim.ras)
+#clim.ras <- clim.ras/cellStats(clim.ras,"max")
+
+# here I split these rasters into a NA component and a NZ component
+
+na.extent <- extent(c(-140, -60,
+                      20, 60))
+
+nz.extent <- extent(c(164, 180,
+                      -47, -34))
+
+na.clim.ras <- crop(clim.ras,na.extent)
+nz.clim.ras <- crop(clim.ras,nz.extent)
+#nz.clim.ras$bio01[] <- nz.clim.ras$bio01[]*10
+
+
+#nz.clim.ras <- nz.clim.ras/cellStats(nz.clim.ras, "max")
+
+# putting the climate raster into a data.frame to be searched and laid over the niche
+nz.clim.pnts <- rasterToPoints(nz.clim.ras) %>% 
+  as.data.frame(.) %>% 
+  mutate(cell=extract(nz.clim.ras,.[,1:2],cellnumbers=T)[,1]) %>% 
+  SpatialPointsDataFrame(coords=.[c("bio01","bio12")],data=.)
+
+# polygons
+nz.shp <- readOGR(dsn="nz_shp/",layer="nz_shp")
+
+conts <- readOGR(dsn="/Users/dperret/Dropbox (Brown)/project_local/pinus/gis_data/continents/",layer="continent")
+```
+
+## setting up occurrence data
+
+```{r}
+
+occs <- read.csv("farj_dlp_natexo_allvars_110317.csv",header=T,stringsAsFactors = F) %>% 
+  select(species, x, y, country, type) %>%
+  mutate(genus="Pinus") %>% 
+  filter(species %in% c("ponderosa","contorta","radiata")) %>% 
+  bind_rows(.,read.csv("conifer_database_climoccs.csv") %>% 
+              filter(genus=="Pseudotsuga" & species=="menziesii") %>% 
+              select(genus, species, x, y, country) %>% 
+              mutate(type="native")) %>%
+  bind_rows(.,read.csv("psme_exoticoccs.csv") %>% 
+              select(genus, species, geo_long, geo_lat, country) %>% 
+              rename(x=geo_long, y=geo_lat) %>% 
+              mutate(type="exotic")) %>% 
+  mutate(bio01=extract(clim.ras$bio01,.[c("x","y")]),
+         bio12=extract(clim.ras$bio12,.[c("x","y")])) %>% 
+  na.omit(.)
+
+```
+
+## setting up niche spaces
+
+```{r}
+pipo.native <- occs %>%
+  filter(species=="ponderosa",type=="native") %>%
+  select(bio01,bio12) %>% 
+  SpatialPoints(.) %>% 
+  mcp(.,percent=100)
+
+pipo.exotic <- occs %>%
+  filter(species=="ponderosa") %>%
+  select(bio01,bio12) %>% 
+  SpatialPoints(.) %>% 
+  mcp(.,percent=100) %>%
+  gSymdifference(.,pipo.native)
+
+pico.native <- occs %>%
+  filter(species=="contorta",type=="native") %>%
+  select(bio01,bio12) %>% 
+  SpatialPoints(.) %>% 
+  mcp(.,percent=100)
+
+pico.exotic <- occs %>%
+  filter(species=="contorta") %>%
+  select(bio01,bio12) %>% 
+  SpatialPoints(.) %>% 
+  mcp(.,percent=100) %>%
+  gSymdifference(.,pico.native)
+
+psme.native <- occs %>%
+  filter(species=="menziesii",type=="native") %>%
+  select(bio01,bio12) %>% 
+  SpatialPoints(.) %>% 
+  mcp(.,percent=100)
+
+psme.exotic <- occs %>%
+  filter(species=="menziesii") %>%
+  select(bio01,bio12) %>% 
+  SpatialPoints(.) %>% 
+  mcp(.,percent=100) %>%
+  gSymdifference(.,psme.native)
+
+```
+
+```{r fig.width=2, fig.height=2}
+plot(occs$bio01,occs$bio12,pch=NA);box(lwd=2)
+plot(native,add=T,col="skyblue3")
+plot(exotic,add=T,col="indianred3")
+#points(occs[which(occs$species=="contorta" & occs$type=="exotic"),c("bio01","bio12")],pch=19)
+#points(occs[which(occs$species=="contorta" & occs$type=="exotic" & occs$country=="New Zealand"),c("bio01","bio12")],pch=19,col="green")
+points(exo.cells,pch=".",col=rgb(0,0,0,0.1))
+```
+
+## mapping niche spaces
+
+```{r}
+sp <- "contorta"
+
+native <- occs %>%
+  filter(species==sp,type=="native") %>%
+  select(bio01,bio12) %>% 
+  SpatialPoints(.) %>% 
+  mcp(.,percent=100)
+
+exotic <- occs %>%
+  filter(species==sp) %>%
+  select(bio01,bio12) %>% 
+  SpatialPoints(.) %>% 
+  mcp(.,percent=100) %>%
+  gSymdifference(.,native)
+
+# laying nz climate over niche spaces
+exo.cells <- nz.clim.pnts[exotic,]
+nat.cells <- nz.clim.pnts[native,]
+notnat.cells <- nz.clim.pnts[-which(nz.clim.pnts$cell %in% nat.cells$cell),]
+
+
+# emptying out climate raster and setting cells in exotic niche space to 1
+nz.ras.exo <- nz.clim.ras$bio01
+nz.ras.exo[] <- NA
+nz.ras.exo[exo.cells$cell] <- 1
+
+nz.ras.nat <- nz.clim.ras$bio01
+nz.ras.nat[which(!is.na(nz.ras.nat[]))] <- NA
+nz.ras.nat[nat.cells$cell] <- 1
+
+nz.ras.notnat <- nz.clim.ras$bio01
+nz.ras.notnat[which(!is.na(nz.ras.notnat[]))] <- NA
+nz.ras.notnat[notnat.cells$cell] <- 1
+
+cent <- gCentroid(native)@coords
+x.dist <- abs(nz.clim.ras$bio01[nat.cells$cell]-cent[,1])
+x.dist <- x.dist/max(x.dist,na.rm=T)
+y.dist <- abs(nz.clim.ras$bio12[nat.cells$cell]-cent[,2])
+y.dist <- y.dist/max(y.dist,na.rm=T)
+dist <- sqrt((x.dist^2)+(y.dist^2))
+nz.ras.natdist <- nz.clim.ras$bio01
+
+nz.ras.natdist[notnat.cells$cell] <- -1
+nz.ras.natdist[exo.cells$cell] <- 0
+
+nz.ras.natdist[nat.cells$cell] <- OneR::bin(dist,nbins=3,labels=c("center","mid","outer"),method="length")
+
+
+nz.ras <- stack(nz.clim.ras, nz.ras.natdist)
+names(nz.ras) <- c("bio01","bio12","natdist")
+  
+```
+
+```{r rasterplot contorta, fig.width=6,fig.height=3}
+
+par(mfrow=c(1,2))
+
+plot(nz.ras$bio01[],nz.ras$bio12[],pch=NA,
+     xlab="Mean Annual Temperature (deg C * 10)",
+     ylab="Annual Precipitation (mm)");box(lwd=2)
+points(nz.ras$bio01[which(nz.ras$natdist[]==-1)],
+       nz.ras$bio12[which(nz.ras$natdist[]==-1)], col="firebrick4", pch=".")#col=rgb(1,0,0,0.6), pch=".")
+points(nz.ras$bio01[which(nz.ras$natdist[]==0)],
+       nz.ras$bio12[which(nz.ras$natdist[]==0)], col="red", pch=".")#col=rgb(1,0,0,0.6), pch=".")
+points(nz.ras$bio01[which(nz.ras$natdist[]==1)],
+       nz.ras$bio12[which(nz.ras$natdist[]==1)], col="chartreuse3", pch=".")#col=rgb(0,01,0,0.6), pch=".")
+points(nz.ras$bio01[which(nz.ras$natdist[]==2)],
+       nz.ras$bio12[which(nz.ras$natdist[]==2)], col="yellow", pch=".")#col=rgb(0.8,0.6,0,0.6), pch=".")
+points(nz.ras$bio01[which(nz.ras$natdist[]==3)],
+       nz.ras$bio12[which(nz.ras$natdist[]==3)], col="skyblue3", pch=".")#col=rgb(0,0,1,0.6), pch=".")
+# points(nz.ras$bio01[which(nz.ras$natdist[]==5)],
+#        nz.ras$bio12[which(nz.ras$natdist[]==5)], col="darkblue", pch=".")#col=rgb(0,0,0.5,0.6), pch=".")
+points(occs[which(occs$species==sp & occs$type=="exotic"), c("bio01","bio12")], pch=17, cex=1.5, col=rgb(0,0,0,0.9))
+plot(native,add=T)
+if(!is.null(exotic)){plot(exotic,add=T)}
+
+
+plot(nz.ras$natdist, col=c("firebrick4","red","chartreuse3","yellow","skyblue3"),
+     main=sp); box(lwd=2)
+plot(conts,add=T)
+points(occs[which(occs$species==sp & occs$type=="exotic"), c("x","y")], pch=17, cex=1.5, col=rgb(0,0,0,0.9))
+
+
+
+# plot(native,add=T,col="skyblue3")
+# plot(exotic,add=T,col="indianred3")
+# #points(occs[which(occs$species=="contorta" & occs$type=="exotic"),c("bio01","bio12")],pch=19)
+# #points(occs[which(occs$species=="contorta" & occs$type=="exotic" & occs$country=="New Zealand"),c("bio01","bio12")],pch=19,col="green")
+# points(exo.cells,pch=".",col=rgb(0,0,0,0.1))
+```
+

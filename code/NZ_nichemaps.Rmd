@@ -1,0 +1,725 @@
+---
+title: "NZ niche maps"
+output:
+  html_document: default
+  word_document: default
+---
+<style>
+.html-widget {
+    margin: auto;
+}
+</style>
+
+```{r SETUP -- THIS ONE IS JUST MAT/AP, include=FALSE,eval=T}
+knitr::opts_chunk$set(echo = FALSE,
+                      include=TRUE,
+                      messages=FALSE,
+                      warnings=FALSE,
+                      fig.width=14,
+                      fig.height = 7)
+
+library(raster)
+library(ecospat)
+library(rgeos)
+library(rgdal)
+library(adehabitatHR)
+library(sp)
+library(maptools)
+library(dplyr)
+library(knitr)
+library(leaflet)
+
+# here are the basic global rasters
+clim.ras <- stack("chelsa/CHELSA_bio10_01.tif","chelsa/CHELSA_bio10_12.tif")
+names(clim.ras) <- c("bio01","bio12")
+
+#clim.ras <- raster::scale(clim.ras)
+#clim.ras <- clim.ras/cellStats(clim.ras,"max")
+
+# here I split these rasters into a NA component and a NZ component
+
+na.extent <- extent(c(-140, -60,
+                      20, 60))
+
+nz.extent <- extent(c(164, 180,
+                      -47, -34))
+
+na.clim.ras <- crop(clim.ras,na.extent)
+nz.clim.ras <- crop(clim.ras,nz.extent)
+#nz.clim.ras$bio01[] <- nz.clim.ras$bio01[]*10
+
+
+#nz.clim.ras <- nz.clim.ras/cellStats(nz.clim.ras, "max")
+
+# putting the climate raster into a data.frame to be searched and laid over the niche
+nz.clim.pnts <- rasterToPoints(nz.clim.ras) %>% 
+  as.data.frame(.) %>% 
+  mutate(cell=extract(nz.clim.ras,.[,1:2],cellnumbers=T)[,1]) %>% 
+  SpatialPointsDataFrame(coords=.[c("bio01","bio12")],data=.)
+
+# polygons
+nz.shp <- readOGR(dsn="nz_shp/",layer="nz_shp")
+
+conts <- readOGR(dsn="/Users/dperret/Dropbox (Brown)/project_local/pinus/gis_data/continents/",layer="continent")
+
+occs <- read.csv("farj_dlp_natexo_allvars_110317.csv",header=T,stringsAsFactors = F) %>% 
+  select(species, x, y, country, type) %>%
+  mutate(genus="Pinus") %>% 
+  filter(species %in% c("ponderosa","contorta","radiata")) %>% 
+  bind_rows(.,read.csv("conifer_database_climoccs.csv") %>% 
+              filter(genus=="Pseudotsuga" & species=="menziesii") %>% 
+              select(genus, species, x, y, country) %>% 
+              mutate(type="native")) %>%
+  bind_rows(.,read.csv("psme_exoticoccs.csv") %>% 
+              select(genus, species, geo_long, geo_lat, country) %>% 
+              rename(x=geo_long, y=geo_lat) %>% 
+              mutate(type="exotic")) %>% 
+  mutate(bio01=extract(clim.ras$bio01,.[c("x","y")]),
+         bio12=extract(clim.ras$bio12,.[c("x","y")])) %>% 
+  na.omit(.)
+
+```
+
+
+```{r SETUP -- PCA CLIMATE, include=FALSE,eval=T}
+knitr::opts_chunk$set(echo = FALSE,
+                      include=TRUE,
+                      messages=FALSE,
+                      warnings=FALSE,
+                      fig.width=14,
+                      fig.height = 7)
+
+library(raster)
+library(ecospat)
+library(rgeos)
+library(rgdal)
+library(adehabitatHR)
+library(sp)
+library(maptools)
+library(dplyr)
+library(knitr)
+library(leaflet)
+
+# here are the basic global rasters
+clim.ras <- stack("chelsa/CHELSA_bio10_01.tif","chelsa/CHELSA_bio10_12.tif",
+                  "chelsa/CHELSA_bio10_04.tif","chelsa/CHELSA_bio10_05.tif",
+                  "chelsa/CHELSA_bio10_06.tif","chelsa/CHELSA_bio10_15.tif",
+                  "chelsa/CHELSA_bio10_19.tif")
+names(clim.ras) <- c("bio01","bio12","bio04","bio05","bio06","bio15","bio19")
+
+#clim.ras <- raster::scale(clim.ras)
+#clim.ras <- clim.ras/cellStats(clim.ras,"max")
+
+# here I split these rasters into a NA component and a NZ component
+
+na.extent <- extent(c(-140, -60,
+                      20, 60))
+
+nz.extent <- extent(c(164, 180,
+                      -47, -34))
+
+na.clim.ras <- crop(clim.ras,na.extent)
+nz.clim.ras <- crop(clim.ras,nz.extent)
+#nz.clim.ras$bio01[] <- nz.clim.ras$bio01[]*10
+
+
+#nz.clim.ras <- nz.clim.ras/cellStats(nz.clim.ras, "max")
+
+# putting the climate raster into a data.frame to be searched and laid over the niche
+
+nz.clim.pnts <- rasterToPoints(nz.clim.ras) %>% 
+  as.data.frame(.) %>% 
+  mutate(cell=extract(nz.clim.ras,.[,1:2],cellnumbers=T)[,1])
+
+all.clim.pnts <- rasterToPoints(na.clim.ras) %>% 
+  as.data.frame(.) %>% 
+  mutate(cell=extract(na.clim.ras,.[,1:2],cellnumbers=T)[,1]) %>% 
+  bind_rows(.,nz.clim.pnts)
+
+
+# polygons
+nz.shp <- readOGR(dsn="nz_shp/",layer="nz_shp")
+
+conts <- readOGR(dsn="/Users/dperret/Dropbox (Brown)/project_local/pinus/gis_data/continents/",layer="continent")
+
+occs <- read.csv("farj_dlp_natexo_allvars_110317.csv",header=T,stringsAsFactors = F) %>% 
+  select(species, x, y, country, type) %>%
+  mutate(genus="Pinus") %>% 
+  filter(species %in% c("ponderosa","contorta","radiata")) %>% 
+  bind_rows(.,read.csv("conifer_database_climoccs.csv") %>% 
+              filter(genus=="Pseudotsuga" & species=="menziesii") %>% 
+              select(genus, species, x, y, country) %>% 
+              mutate(type="native")) %>%
+  bind_rows(.,read.csv("psme_exoticoccs.csv") %>% 
+              select(genus, species, geo_long, geo_lat, country) %>% 
+              rename(x=geo_long, y=geo_lat) %>% 
+              mutate(type="exotic")) %>% 
+  mutate(bio01=extract(clim.ras$bio01,.[c("x","y")]),
+         bio12=extract(clim.ras$bio12,.[c("x","y")]),
+         bio04=extract(clim.ras$bio04,.[c("x","y")]),
+         bio05=extract(clim.ras$bio05,.[c("x","y")]),
+         bio06=extract(clim.ras$bio06,.[c("x","y")]),
+         bio15=extract(clim.ras$bio15,.[c("x","y")]),
+         bio19=extract(clim.ras$bio19,.[c("x","y")])) %>% 
+  na.omit(.)
+
+# here's the pca thing
+
+data <- all.clim.pnts %>% 
+  select(bio01,bio12,bio04,bio05,bio06,bio15,bio19) %>% 
+  bind_rows(occs %>% select(bio01,bio12,bio04,bio05,bio06,bio15,bio19))
+weights <- c(rep(1,nrow(all.clim.pnts)),rep(0,nrow(occs)))
+
+pca.cal <- dudi.pca(data,row.w = weights,center = T,scale = T, scannf=F, nf = 2)
+
+nz.rows <- (((nrow(all.clim.pnts)-nrow(nz.clim.pnts))+1):nrow(all.clim.pnts))
+
+s.corcircle(pca.cal$co[, 1:2]/max(abs(pca.cal$co[, 1:2])), 
+            grid = F,fullcircle=T,
+            sub = paste("axis1 = ", 
+                        round(pca.cal$eig[1]/sum(pca.cal$eig) * 100, 2), "%", "axis2 = ", 
+                        round(pca.cal$eig[2]/sum(pca.cal$eig) * 100, 2), "%"),
+            possub="bottomright", clabel=2.3)
+
+nz.clim.pnts <- nz.clim.pnts %>% 
+  bind_cols(.,pca.cal$li[nz.rows,]) %>% 
+  SpatialPointsDataFrame(coords=.[,c("Axis1","Axis2")],data=.)
+
+occs <- occs %>% 
+  bind_cols(.,pca.cal$li[(nrow(all.clim.pnts)+1):nrow(pca.cal$li),])
+```
+Here are a couple maps that divide NZ up into climatic zones based on the niche space of different species. Briefly -- the MATxAP niche space of each species was defined using herbarium records for both the native range and the naturalized range. NZ climate space was then split into three parts: 1) inside the native niche, 2) inside the  naturalized niche but outside the native niche, and 3) outside all known niche space. Climates inside the native niche were then catagorized as "central", "mid", or "outer", depending on the climatic distance to the niche center. 
+
+In each figure, the niche plot is on the left and the map is on the right. Colors correspond to the same climates between the two panels. Black triangles are naturalized populations for which we have herbarium records. 
+
+Color codes are as follows:  
+
+**-1 (dark red)** : outside all known niche space  
+**0 (light red)** : inside naturalized niche; outside native niche  
+**1 (green)**     : central native niche  
+**2 (yellow)**    : mid native niche  
+**3 (blue)**      : outer native niche  
+
+Ideally, I could sample populations in each climate zone. Light red climates are critical, as they represent the known non-native niche space. 
+
+*** 
+```{r PCA_climate}
+sp <- "radiata"
+
+native <- occs %>%
+  filter(species==sp,type=="native") %>%
+  select(Axis1,Axis2) %>% 
+  SpatialPoints(.) %>% 
+  mcp(.,percent=100)
+
+exotic <- occs %>%
+  filter(species==sp) %>%
+  select(Axis1,Axis2) %>% 
+  SpatialPoints(.) %>% 
+  mcp(.,percent=100) %>%
+  gSymdifference(.,native)
+
+# laying nz climate over niche spaces
+exo.cells <- nz.clim.pnts[exotic,]
+nat.cells <- nz.clim.pnts[native,]
+if(!is.na(nat.cells$cell[1])){notnat.cells <- nz.clim.pnts[-which(nz.clim.pnts$cell %in% nat.cells$cell),]
+} else{
+  notnat.cells <- nz.clim.pnts[-which(nz.clim.pnts$cell %in% exo.cells$cell),]
+}
+
+
+# emptying out climate raster and setting cells in exotic niche space to 1
+nz.ras.exo <- nz.clim.ras$bio01
+nz.ras.exo[] <- NA
+nz.ras.exo[exo.cells$cell] <- 1
+
+nz.ras.nat <- nz.clim.ras$bio01
+nz.ras.nat[which(!is.na(nz.ras.nat[]))] <- NA
+nz.ras.nat[nat.cells$cell] <- 1
+
+nz.ras.notnat <- nz.clim.ras$bio01
+nz.ras.notnat[which(!is.na(nz.ras.notnat[]))] <- NA
+nz.ras.notnat[notnat.cells$cell] <- 1
+
+cent <- gCentroid(native)
+
+# x.dist <- abs(nz.clim.pnts$Axis1-cent[,1])
+# x.dist <- x.dist/max(x.dist,na.rm=T)
+# y.dist <- abs(nz.clim.pnts$Axis2-cent[,2])
+# y.dist <- y.dist/max(y.dist,na.rm=T)
+# dist <- sqrt((x.dist^2)+(y.dist^2))
+
+if(!is.na(nat.cells$cell[1])){
+  dist <- gDistance(cent, nat.cells,byid = T)
+  bin.dist <- OneR::bin(dist,nbins=3,labels=c("1","2","3"),method="length")
+} else {
+    dist <- NA
+  }
+
+nz.ras.natdist <- nz.clim.ras$bio01
+nz.ras.natdist[notnat.cells$cell] <- -1
+nz.ras.natdist[exo.cells$cell] <- 0
+nz.ras.natdist[nat.cells$cell] <- bin.dist$X1
+
+nz.axis1 <- nz.clim.ras$bio01
+nz.axis1[which(!is.na(nz.axis1[]))] <- nz.clim.pnts$Axis1
+
+nz.axis2 <- nz.clim.ras$bio01
+nz.axis2[which(!is.na(nz.axis2[]))] <- nz.clim.pnts$Axis2
+
+nz.ras <- stack(nz.clim.ras, nz.axis1, nz.axis2, nz.ras.natdist)
+names(nz.ras) <- c("bio01", "bio12", "bio04", "bio05", "bio06", "bio15", "bio19","Axis1","Axis2","natdist")
+
+
+par(mfrow=c(1,2))
+
+plot(nz.ras$Axis1[],nz.ras$Axis2[],
+     pch=NA, xlab="PC1",ylab="PC2");box(lwd=2)
+points(nz.ras$Axis1[which(nz.ras$natdist[]==-1)],
+       nz.ras$Axis2[which(nz.ras$natdist[]==-1)], col="firebrick4", pch=".")#col=rgb(1,0,0,0.6), pch=".")
+points(nz.ras$Axis1[which(nz.ras$natdist[]==0)],
+       nz.ras$Axis2[which(nz.ras$natdist[]==0)], col="red", pch=".")#col=rgb(1,0,0,0.6), pch=".")
+points(nz.ras$Axis1[which(nz.ras$natdist[]==1)],
+       nz.ras$Axis2[which(nz.ras$natdist[]==1)], col="chartreuse3", pch=".")#col=rgb(0,01,0,0.6), pch=".")
+points(nz.ras$Axis1[which(nz.ras$natdist[]==2)],
+       nz.ras$Axis2[which(nz.ras$natdist[]==2)], col="yellow", pch=".")#col=rgb(0.8,0.6,0,0.6), pch=".")
+points(nz.ras$Axis1[which(nz.ras$natdist[]==3)],
+       nz.ras$Axis2[which(nz.ras$natdist[]==3)], col="skyblue3", pch=".")#col=rgb(0,0,1,0.6), pch=".")
+# points(nz.ras$bio01[which(nz.ras$natdist[]==5)],
+#        nz.ras$bio12[which(nz.ras$natdist[]==5)], col="darkblue", pch=".")#col=rgb(0,0,0.5,0.6), pch=".")
+points(occs[which(occs$species==sp & occs$type=="exotic"), c("Axis1","Axis2")], pch=17, cex=1.5, col=rgb(0,0,0,0.9))
+plot(native,add=T)
+if(!is.null(exotic)){plot(exotic,add=T)}
+
+pal <- palette(c("firebrick4","red","chartreuse3","yellow","skyblue3"))
+
+plot(nz.ras$natdist, col=pal[1:length(unique(nz.ras$natdist))],
+     main=sp); box(lwd=2)
+plot(conts,add=T)
+points(occs[which(occs$species==sp & occs$type=="exotic"), c("x","y")], pch=17, cex=1.5, col=rgb(0,0,0,0.9))
+
+```
+
+```{r fig.align="center"}
+leaflet(width="80%") %>% addTiles() %>%
+  addRasterImage(nz.ras$natdist, colors=c("firebrick4","red","chartreuse3","yellow","skyblue3"), opacity=0.5) %>%
+  addMarkers(lng = occs[which(occs$species==sp & occs$type=="exotic" & occs$country=="New Zealand"), c("x")],
+             lat = occs[which(occs$species==sp & occs$type=="exotic" & occs$country=="New Zealand"), c("y")]) %>% 
+  addLegend(colors=c("darkred","red","green","yellow","blue"), 
+            labels=c("outside known niche","naturalized niche","realized center","realized mid","realized outer"),
+            title="categories")
+```
+
+
+
+
+
+***
+
+## The following use just an MATxAP climate space:
+### *Pinus contorta*
+
+```{r MATxP, eval=F}
+sp <- "contorta"
+
+native <- occs %>%
+  filter(species==sp,type=="native") %>%
+  select(bio01,bio12) %>% 
+  SpatialPoints(.) %>% 
+  mcp(.,percent=100)
+
+exotic <- occs %>%
+  filter(species==sp) %>%
+  select(bio01,bio12) %>% 
+  SpatialPoints(.) %>% 
+  mcp(.,percent=100) %>%
+  gSymdifference(.,native)
+
+# laying nz climate over niche spaces
+exo.cells <- nz.clim.pnts[exotic,]
+nat.cells <- nz.clim.pnts[native,]
+notnat.cells <- nz.clim.pnts[-which(nz.clim.pnts$cell %in% nat.cells$cell),]
+
+
+# emptying out climate raster and setting cells in exotic niche space to 1
+nz.ras.exo <- nz.clim.ras$bio01
+nz.ras.exo[] <- NA
+nz.ras.exo[exo.cells$cell] <- 1
+
+nz.ras.nat <- nz.clim.ras$bio01
+nz.ras.nat[which(!is.na(nz.ras.nat[]))] <- NA
+nz.ras.nat[nat.cells$cell] <- 1
+
+nz.ras.notnat <- nz.clim.ras$bio01
+nz.ras.notnat[which(!is.na(nz.ras.notnat[]))] <- NA
+nz.ras.notnat[notnat.cells$cell] <- 1
+
+cent <- gCentroid(native)@coords
+x.dist <- abs(nz.clim.ras$bio01[nat.cells$cell]-cent[,1])
+x.dist <- x.dist/max(x.dist,na.rm=T)
+y.dist <- abs(nz.clim.ras$bio12[nat.cells$cell]-cent[,2])
+y.dist <- y.dist/max(y.dist,na.rm=T)
+dist <- sqrt((x.dist^2)+(y.dist^2))
+nz.ras.natdist <- nz.clim.ras$bio01
+
+nz.ras.natdist[notnat.cells$cell] <- -1
+nz.ras.natdist[exo.cells$cell] <- 0
+
+nz.ras.natdist[nat.cells$cell] <- OneR::bin(dist,nbins=3,labels=c("center","mid","outer"),method="length")
+
+
+nz.ras <- stack(nz.clim.ras, nz.ras.natdist)
+names(nz.ras) <- c("bio01","bio12","natdist")
+
+
+par(mfrow=c(1,2))
+
+plot(nz.ras$bio01[],nz.ras$bio12[],pch=NA,
+     xlab="Mean Annual Temperature (deg C * 10)",
+     ylab="Annual Precipitation (mm)");box(lwd=2)
+points(nz.ras$bio01[which(nz.ras$natdist[]==-1)],
+       nz.ras$bio12[which(nz.ras$natdist[]==-1)], col="firebrick4", pch=".")#col=rgb(1,0,0,0.6), pch=".")
+points(nz.ras$bio01[which(nz.ras$natdist[]==0)],
+       nz.ras$bio12[which(nz.ras$natdist[]==0)], col="red", pch=".")#col=rgb(1,0,0,0.6), pch=".")
+points(nz.ras$bio01[which(nz.ras$natdist[]==1)],
+       nz.ras$bio12[which(nz.ras$natdist[]==1)], col="chartreuse3", pch=".")#col=rgb(0,01,0,0.6), pch=".")
+points(nz.ras$bio01[which(nz.ras$natdist[]==2)],
+       nz.ras$bio12[which(nz.ras$natdist[]==2)], col="yellow", pch=".")#col=rgb(0.8,0.6,0,0.6), pch=".")
+points(nz.ras$bio01[which(nz.ras$natdist[]==3)],
+       nz.ras$bio12[which(nz.ras$natdist[]==3)], col="skyblue3", pch=".")#col=rgb(0,0,1,0.6), pch=".")
+# points(nz.ras$bio01[which(nz.ras$natdist[]==5)],
+#        nz.ras$bio12[which(nz.ras$natdist[]==5)], col="darkblue", pch=".")#col=rgb(0,0,0.5,0.6), pch=".")
+points(occs[which(occs$species==sp & occs$type=="exotic"), c("bio01","bio12")], pch=17, cex=1.5, col=rgb(0,0,0,0.9))
+plot(native,add=T)
+if(!is.null(exotic)){plot(exotic,add=T)}
+
+
+plot(nz.ras$natdist, col=c("firebrick4","red","chartreuse3","yellow","skyblue3"),
+     main=sp); box(lwd=2)
+plot(conts,add=T)
+points(occs[which(occs$species==sp & occs$type=="exotic"), c("x","y")], pch=17, cex=1.5, col=rgb(0,0,0,0.9))
+
+```
+```{r fig.align="center", eval=F}
+leaflet(width="80%") %>% addTiles() %>%
+  addRasterImage(nz.ras$natdist, colors=c("firebrick4","red","chartreuse3","yellow","skyblue3"), opacity=0.5) %>%
+  addMarkers(lng = occs[which(occs$species==sp & occs$type=="exotic" & occs$country=="New Zealand"), c("x")],
+             lat = occs[which(occs$species==sp & occs$type=="exotic" & occs$country=="New Zealand"), c("y")]) %>% 
+  addLegend(colors=c("darkred","red","green","yellow","blue"), 
+            labels=c("outside known niche","naturalized niche","realized center","realized mid","realized outer"),
+            title="categories")
+```
+
+  
+### *Pinus ponderosa*
+```{r, eval=F}
+sp <- "ponderosa"
+
+native <- occs %>%
+  filter(species==sp,type=="native") %>%
+  select(bio01,bio12) %>% 
+  SpatialPoints(.) %>% 
+  mcp(.,percent=100)
+
+exotic <- occs %>%
+  filter(species==sp) %>%
+  select(bio01,bio12) %>% 
+  SpatialPoints(.) %>% 
+  mcp(.,percent=100) %>%
+  gSymdifference(.,native)
+
+# laying nz climate over niche spaces
+exo.cells <- nz.clim.pnts[exotic,]
+nat.cells <- nz.clim.pnts[native,]
+notnat.cells <- nz.clim.pnts[-which(nz.clim.pnts$cell %in% nat.cells$cell),]
+
+
+# emptying out climate raster and setting cells in exotic niche space to 1
+nz.ras.exo <- nz.clim.ras$bio01
+nz.ras.exo[] <- NA
+nz.ras.exo[exo.cells$cell] <- 1
+
+nz.ras.nat <- nz.clim.ras$bio01
+nz.ras.nat[which(!is.na(nz.ras.nat[]))] <- NA
+nz.ras.nat[nat.cells$cell] <- 1
+
+nz.ras.notnat <- nz.clim.ras$bio01
+nz.ras.notnat[which(!is.na(nz.ras.notnat[]))] <- NA
+nz.ras.notnat[notnat.cells$cell] <- 1
+
+cent <- gCentroid(native)@coords
+x.dist <- abs(nz.clim.ras$bio01[nat.cells$cell]-cent[,1])
+x.dist <- x.dist/max(x.dist,na.rm=T)
+y.dist <- abs(nz.clim.ras$bio12[nat.cells$cell]-cent[,2])
+y.dist <- y.dist/max(y.dist,na.rm=T)
+dist <- sqrt((x.dist^2)+(y.dist^2))
+nz.ras.natdist <- nz.clim.ras$bio01
+
+nz.ras.natdist[notnat.cells$cell] <- -1
+nz.ras.natdist[exo.cells$cell] <- 0
+
+nz.ras.natdist[nat.cells$cell] <- OneR::bin(dist,nbins=3,labels=c("center","mid","outer"),method="length")
+
+
+nz.ras <- stack(nz.clim.ras, nz.ras.natdist)
+names(nz.ras) <- c("bio01","bio12","natdist")
+
+
+par(mfrow=c(1,2))
+
+plot(nz.ras$bio01[],nz.ras$bio12[],pch=NA,
+     xlab="Mean Annual Temperature (deg C * 10)",
+     ylab="Annual Precipitation (mm)");box(lwd=2)
+points(nz.ras$bio01[which(nz.ras$natdist[]==-1)],
+       nz.ras$bio12[which(nz.ras$natdist[]==-1)], col="firebrick4", pch=".")#col=rgb(1,0,0,0.6), pch=".")
+points(nz.ras$bio01[which(nz.ras$natdist[]==0)],
+       nz.ras$bio12[which(nz.ras$natdist[]==0)], col="red", pch=".")#col=rgb(1,0,0,0.6), pch=".")
+points(nz.ras$bio01[which(nz.ras$natdist[]==1)],
+       nz.ras$bio12[which(nz.ras$natdist[]==1)], col="chartreuse3", pch=".")#col=rgb(0,01,0,0.6), pch=".")
+points(nz.ras$bio01[which(nz.ras$natdist[]==2)],
+       nz.ras$bio12[which(nz.ras$natdist[]==2)], col="yellow", pch=".")#col=rgb(0.8,0.6,0,0.6), pch=".")
+points(nz.ras$bio01[which(nz.ras$natdist[]==3)],
+       nz.ras$bio12[which(nz.ras$natdist[]==3)], col="skyblue3", pch=".")#col=rgb(0,0,1,0.6), pch=".")
+# points(nz.ras$bio01[which(nz.ras$natdist[]==5)],
+#        nz.ras$bio12[which(nz.ras$natdist[]==5)], col="darkblue", pch=".")#col=rgb(0,0,0.5,0.6), pch=".")
+points(occs[which(occs$species==sp & occs$type=="exotic"), c("bio01","bio12")], pch=17, cex=1.5, col=rgb(0,0,0,0.9))
+plot(native,add=T)
+if(!is.null(exotic)){plot(exotic,add=T)}
+
+
+plot(nz.ras$natdist, col=c("firebrick4","red","chartreuse3","yellow","skyblue3"),
+     main=sp); box(lwd=2)
+plot(conts,add=T)
+points(occs[which(occs$species==sp & occs$type=="exotic"), c("x","y")], pch=17, cex=1.5, col=rgb(0,0,0,0.9))
+
+```
+```{r fig.align="center", eval=F}
+leaflet(width="80%") %>% addTiles() %>%
+  addRasterImage(nz.ras$natdist, colors=c("firebrick4","red","chartreuse3","yellow","skyblue3"), opacity=0.5) %>%
+  addMarkers(lng = occs[which(occs$species==sp & occs$type=="exotic" & occs$country=="New Zealand"), c("x")],
+             lat = occs[which(occs$species==sp & occs$type=="exotic" & occs$country=="New Zealand"), c("y")]) %>% 
+  addLegend(colors=c("darkred","red","green","yellow","blue"), labels=c("outside known niche","naturalized niche","realized center","realized mid","realized outer"),
+            title="categories")
+```
+  
+  
+### *Pinus radiata*
+```{r eval=F}
+sp <- "radiata"
+
+native <- occs %>%
+  filter(species==sp,type=="native") %>%
+  select(bio01,bio12) %>% 
+  SpatialPoints(.) %>% 
+  mcp(.,percent=100)
+
+exotic <- occs %>%
+  filter(species==sp) %>%
+  select(bio01,bio12) %>% 
+  SpatialPoints(.) %>% 
+  mcp(.,percent=100) %>%
+  gSymdifference(.,native)
+
+# laying nz climate over niche spaces
+exo.cells <- nz.clim.pnts[exotic,]
+nat.cells <- nz.clim.pnts[native,]
+notnat.cells <- nz.clim.pnts[-which(nz.clim.pnts$cell %in% nat.cells$cell),]
+
+
+# emptying out climate raster and setting cells in exotic niche space to 1
+nz.ras.exo <- nz.clim.ras$bio01
+nz.ras.exo[] <- NA
+nz.ras.exo[exo.cells$cell] <- 1
+
+nz.ras.nat <- nz.clim.ras$bio01
+nz.ras.nat[which(!is.na(nz.ras.nat[]))] <- NA
+nz.ras.nat[nat.cells$cell] <- 1
+
+nz.ras.notnat <- nz.clim.ras$bio01
+nz.ras.notnat[which(!is.na(nz.ras.notnat[]))] <- NA
+nz.ras.notnat[notnat.cells$cell] <- 1
+
+cent <- gCentroid(native)@coords
+x.dist <- abs(nz.clim.ras$bio01[nat.cells$cell]-cent[,1])
+x.dist <- x.dist/max(x.dist,na.rm=T)
+y.dist <- abs(nz.clim.ras$bio12[nat.cells$cell]-cent[,2])
+y.dist <- y.dist/max(y.dist,na.rm=T)
+dist <- sqrt((x.dist^2)+(y.dist^2))
+nz.ras.natdist <- nz.clim.ras$bio01
+
+nz.ras.natdist[notnat.cells$cell] <- -1
+nz.ras.natdist[exo.cells$cell] <- 0
+
+nz.ras.natdist[nat.cells$cell] <- OneR::bin(dist,nbins=3,labels=c("center","mid","outer"),method="length")
+
+
+nz.ras <- stack(nz.clim.ras, nz.ras.natdist)
+names(nz.ras) <- c("bio01","bio12","natdist")
+
+
+par(mfrow=c(1,2))
+
+plot(nz.ras$bio01[],nz.ras$bio12[],pch=NA,
+     xlab="Mean Annual Temperature (deg C * 10)",
+     ylab="Annual Precipitation (mm)");box(lwd=2)
+points(nz.ras$bio01[which(nz.ras$natdist[]==-1)],
+       nz.ras$bio12[which(nz.ras$natdist[]==-1)], col="firebrick4", pch=".")#col=rgb(1,0,0,0.6), pch=".")
+points(nz.ras$bio01[which(nz.ras$natdist[]==0)],
+       nz.ras$bio12[which(nz.ras$natdist[]==0)], col="red", pch=".")#col=rgb(1,0,0,0.6), pch=".")
+points(nz.ras$bio01[which(nz.ras$natdist[]==1)],
+       nz.ras$bio12[which(nz.ras$natdist[]==1)], col="chartreuse3", pch=".")#col=rgb(0,01,0,0.6), pch=".")
+points(nz.ras$bio01[which(nz.ras$natdist[]==2)],
+       nz.ras$bio12[which(nz.ras$natdist[]==2)], col="yellow", pch=".")#col=rgb(0.8,0.6,0,0.6), pch=".")
+points(nz.ras$bio01[which(nz.ras$natdist[]==3)],
+       nz.ras$bio12[which(nz.ras$natdist[]==3)], col="skyblue3", pch=".")#col=rgb(0,0,1,0.6), pch=".")
+# points(nz.ras$bio01[which(nz.ras$natdist[]==5)],
+#        nz.ras$bio12[which(nz.ras$natdist[]==5)], col="darkblue", pch=".")#col=rgb(0,0,0.5,0.6), pch=".")
+points(occs[which(occs$species==sp & occs$type=="exotic"), c("bio01","bio12")], pch=17, cex=1.5, col=rgb(0,0,0,0.9))
+plot(native,add=T)
+if(!is.null(exotic)){plot(exotic,add=T)}
+
+
+plot(nz.ras$natdist, col=c("firebrick4","red","chartreuse3","yellow","skyblue3"),
+     main=sp); box(lwd=2)
+plot(conts,add=T)
+points(occs[which(occs$species==sp & occs$type=="exotic"), c("x","y")], pch=17, cex=1.5, col=rgb(0,0,0,0.9))
+
+
+```
+```{r fig.align="center", eval=F}
+leaflet(width="80%") %>% addTiles() %>%
+  addRasterImage(nz.ras$natdist, colors=c("firebrick4","red","chartreuse3","yellow","skyblue3"), opacity=0.5) %>%
+  addMarkers(lng = occs[which(occs$species==sp & occs$type=="exotic" & occs$country=="New Zealand"), c("x")],
+             lat = occs[which(occs$species==sp & occs$type=="exotic" & occs$country=="New Zealand"), c("y")]) %>% 
+  addLegend(colors=c("darkred","red","green","yellow","blue"), labels=c("outside known niche","naturalized niche","realized center","realized mid","realized outer"),
+            title="categories")
+```
+  
+  
+### *Pseudotsuga menziesii*
+```{r,warnings=FALSE,message=FALSE,echo=FALSE, eval=F }
+sp <- "menziesii"
+
+native <- occs %>%
+  filter(species==sp,type=="native") %>%
+  select(bio01,bio12) %>% 
+  SpatialPoints(.) %>% 
+  mcp(.,percent=100)
+
+exotic <- occs %>%
+  filter(species==sp) %>%
+  select(bio01,bio12) %>% 
+  SpatialPoints(.) %>% 
+  mcp(.,percent=100) %>%
+  gSymdifference(.,native)
+
+# laying nz climate over niche spaces
+exo.cells <- nz.clim.pnts[exotic,]
+nat.cells <- nz.clim.pnts[native,]
+notnat.cells <- nz.clim.pnts[-which(nz.clim.pnts$cell %in% nat.cells$cell),]
+
+
+# emptying out climate raster and setting cells in exotic niche space to 1
+nz.ras.exo <- nz.clim.ras$bio01
+nz.ras.exo[] <- NA
+nz.ras.exo[exo.cells$cell] <- 1
+
+nz.ras.nat <- nz.clim.ras$bio01
+nz.ras.nat[which(!is.na(nz.ras.nat[]))] <- NA
+nz.ras.nat[nat.cells$cell] <- 1
+
+nz.ras.notnat <- nz.clim.ras$bio01
+nz.ras.notnat[which(!is.na(nz.ras.notnat[]))] <- NA
+nz.ras.notnat[notnat.cells$cell] <- 1
+
+cent <- gCentroid(native)@coords
+x.dist <- abs(nz.clim.ras$bio01[nat.cells$cell]-cent[,1])
+x.dist <- x.dist/max(x.dist,na.rm=T)
+y.dist <- abs(nz.clim.ras$bio12[nat.cells$cell]-cent[,2])
+y.dist <- y.dist/max(y.dist,na.rm=T)
+dist <- sqrt((x.dist^2)+(y.dist^2))
+nz.ras.natdist <- nz.clim.ras$bio01
+
+nz.ras.natdist[notnat.cells$cell] <- -1
+nz.ras.natdist[exo.cells$cell] <- 0
+
+nz.ras.natdist[nat.cells$cell] <- OneR::bin(dist,nbins=3,labels=c("center","mid","outer"),method="length")
+
+
+nz.ras <- stack(nz.clim.ras, nz.ras.natdist)
+names(nz.ras) <- c("bio01","bio12","natdist")
+
+
+par(mfrow=c(1,2))
+
+plot(nz.ras$bio01[],nz.ras$bio12[],pch=NA,
+     xlab="Mean Annual Temperature (deg C * 10)",
+     ylab="Annual Precipitation (mm)");box(lwd=2)
+points(nz.ras$bio01[which(nz.ras$natdist[]==-1)],
+       nz.ras$bio12[which(nz.ras$natdist[]==-1)], col="firebrick4", pch=".")#col=rgb(1,0,0,0.6), pch=".")
+points(nz.ras$bio01[which(nz.ras$natdist[]==0)],
+       nz.ras$bio12[which(nz.ras$natdist[]==0)], col="red", pch=".")#col=rgb(1,0,0,0.6), pch=".")
+points(nz.ras$bio01[which(nz.ras$natdist[]==1)],
+       nz.ras$bio12[which(nz.ras$natdist[]==1)], col="chartreuse3", pch=".")#col=rgb(0,01,0,0.6), pch=".")
+points(nz.ras$bio01[which(nz.ras$natdist[]==2)],
+       nz.ras$bio12[which(nz.ras$natdist[]==2)], col="yellow", pch=".")#col=rgb(0.8,0.6,0,0.6), pch=".")
+points(nz.ras$bio01[which(nz.ras$natdist[]==3)],
+       nz.ras$bio12[which(nz.ras$natdist[]==3)], col="skyblue3", pch=".")#col=rgb(0,0,1,0.6), pch=".")
+# points(nz.ras$bio01[which(nz.ras$natdist[]==5)],
+#        nz.ras$bio12[which(nz.ras$natdist[]==5)], col="darkblue", pch=".")#col=rgb(0,0,0.5,0.6), pch=".")
+points(occs[which(occs$species==sp & occs$type=="exotic"), c("bio01","bio12")], pch=17, cex=1.5, col=rgb(0,0,0,0.9))
+plot(native,add=T)
+if(!is.null(exotic)){plot(exotic,add=T)}
+
+
+plot(nz.ras$natdist, col=c("firebrick4","red","chartreuse3","yellow","skyblue3"),
+     main=sp); box(lwd=2)
+plot(conts,add=T)
+points(occs[which(occs$species==sp & occs$type=="exotic"), c("x","y")], pch=17, cex=1.5, col=rgb(0,0,0,0.9))
+
+
+```
+```{r fig.align="center", eval=F}
+leaflet(width="80%") %>% addTiles() %>%
+  addRasterImage(nz.ras$natdist, colors=c("firebrick4","red","chartreuse3","yellow","skyblue3"), opacity=0.5) %>%
+  addMarkers(lng = occs[which(occs$species==sp & occs$type=="exotic" & occs$country=="New Zealand"), c("x")],
+             lat = occs[which(occs$species==sp & occs$type=="exotic" & occs$country=="New Zealand"), c("y")]) %>% 
+  addLegend(colors=c("darkred","red","green","yellow","blue"), labels=c("outside known niche","naturalized niche","realized center","realized mid","realized outer"),
+            title="categories")
+```
+
+***
+
+###*Reasons to not be (overly) concerned*  
+
+  
+####**1) This is a simpler climate space than our other niche models.**   
+  The climate space in the figures above *just* incorporates MAT and AP -- there's no information about seasonality, max/min, etc. The reasons that I haven't incorporated seasonality, annual max/min, etc into these is mostly because processing the climate data (using CHELSA for NZ, as worldclim and equivalents mask alot of topoclimatic variation) is time-intensive. Additionally, I'm trying to figure out whether including those extra variables into the niche models matters much when the analysis of the growth time-series explicitly incorporates annual climate variation. Finally, for these purposes (i.e., site selection, getting feedback from other researchers), there might be value in keeping the climate space as simple as possible. Interpretation gets muddier when we start dealing with PC axes.  
+<br> 
+  That all said, making the climate space more complex will have the effect of expanding the naturalized niche space (giving more area to search for naturalized populations as well). Copied below is the global figure for *P. ponderosa* from my proposal. The naturalized climate space is much larger in this figure, because the climate space includes seasonality, etc.
+
+```{r out.width="70%", echo=F, include=TRUE}
+include_graphics("/Users/dperret/Dropbox (Brown)/PROPOSAL_MATERIALS/chap4_fig3.png")
+```
+
+  Similarly, some of the preliminary modeling I did for *Pseudotsuga menziesii* using a more complex (but lower-resolution) climate space showed a bit of niche expansion in NZ -- not reflected in this simpler climate space.
+
+####**2) The herbarium records are limited.**
+There are certain to be *many* more naturalized localities than the ones for which I've found herbarium records. I'll get a better sense for this if/when I get better invasion data from Landcare. My hope is that by overlaying the climate zones above with better invasion data, I can identify many more naturalized populations to sample. Also, with these climate zones defined beforehand, I can put in some time searching for more populations in a more focused way, on the ground in the field but also with satellite and aerial imagery beforehand.
+
+####**3) There's still alot of value in collecting non-native data inside the realized niche.**  
+
+Copied below are the initial research questions for this chapter, pulled from my proposal:
+
+
+```{r out.width="70%", echo=F, include=TRUE, eval=T}
+include_graphics("/Users/dperret/Dropbox (Brown)/PROPOSAL_MATERIALS/chap4_questions.png")
+```
+
+So, even though the final question (*"what does the fundamental niche look like?"*) is clearly the most interesting, there are still interesting questions that can be answered if non-native sampling is constrained to the realized niche. Native - naturalized differences in the *realized* niche structure can also be used to get some sort of handle on the fundamental niche. Imagine that a growth model parameterized with native range data predicts pretty good growth in climates up to 20% wetter and 2 degrees cooler than the native, and no growth beyond that. Based on what we observe in the native range, we would predict that to be the boundary of the fundamental niche. Ideally, we'd have populations in that space to sample and test those predictions. But if we don't, we could ask how the predictions of a growth model parameterized with *non-native realized niche* data compare to the native range predictions. Do they predict the same fundamental niche boundary? Do they give similar growth predictions? Climates are matched, but biotic settings are different -- how much does that effect the inference we make? Additionally, if *both* models predict growth in a certain climate (that's available in both regions, or just in the naturalized region), what do we learn if we *can't* find any populations there?
+  
+Copied below is the conceptual figure that touches on this from my proposal:
+
+```{r out.width="80%", echo=F, include=TRUE, eval=T}
+include_graphics("/Users/dperret/Dropbox (Brown)/PROPOSAL_MATERIALS/chap4_fig2.png")
+```

@@ -1,0 +1,357 @@
+---
+title: "Sugar Pine status and trends assessment"
+date: "`r Sys.Date()`"
+author: "D. Perret"
+output: 
+  rmdformats::robobook:
+    code_folding: hide
+    self_contained: true
+editor_options: 
+  chunk_output_type: console
+---
+
+```{css zoom-lib-src, echo = FALSE, eval=F}
+script src = "https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"
+```
+
+```{js zoom-jquery, echo = FALSE, eval=F}
+$(document).ready(function() {
+$('body').prepend('<div class=\"zoomDiv\"><img src=\"\" class=\"zoomImg\"></div>');
+// onClick function for all plots (img's)
+$('img:not(.zoomImg)').click(function() {
+$('.zoomImg').attr('src', $(this).attr('src')).css({width: '100x%'});
+$('.zoomDiv').css({opacity: '1', width: 'auto', border: '1px solid white', borderRadius: '5px', position: 'fixed', top: '50%', left: '50%', marginRight: '-50%', transform: 'translate(-50%, -50%)', boxShadow: '0px 0px 50px #888888', zIndex: '50', overflow: 'auto', maxHeight: '100%'});
+});
+// onClick function for zoomImg
+$('img.zoomImg').click(function() {
+$('.zoomDiv').css({opacity: '0', width: '0%'}); 
+});
+});
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      prompt = FALSE,
+                      error = TRUE,
+                      message = FALSE,
+                      cache = FALSE,
+                      cache.lazy = FALSE,
+                      eval = TRUE,
+                      eval.after = "fig.cap")
+
+library(rmarkdown)
+library(tidyverse)
+library(rFIA)
+library(ggplot2)
+library(ggExtra)
+library(rgdal)
+library(sp)
+library(ggsci)
+library(raster)
+library(splines)
+library(lme4)
+library(patchwork)
+library(ade4)
+library(adehabitatHR)
+library(leaflet)
+
+select <- dplyr::select
+
+theme_set(theme_bw())
+theme_update(text = element_text(size=16, color = "black"),
+             panel.grid.major = element_blank(),
+             panel.grid.minor = element_blank(),
+             strip.background = element_blank(),
+             panel.border=element_rect(size=1.5))
+
+source("/Users/DanielPerret/Box/01. daniel.perret Workspace/PROJECTS/status_trends/growMort_rewrite_METRIC.R")
+```
+
+## Introduction/contrext
+
+The following text is pulled from the FY23 Project Narrative:
+
+**Description/Justification**
+
+Sugar pine (Pinus lambertiana) provides high-value regulating, provisioning, cultural, and supporting ecosystem services across its distribution in Oregon and California. However, a host of stressors (historical logging of large old trees, fire exclusion, introduced pathogens, endemic bark beetles, and climate change) have driven widespread declines in sugar pine populations across much of its range. Despite this, there are no existing range-wide assessments of the status (current conditions), demographic trends (recruitment, growth, and mortality), or mortality vulnerability of sugar pine. This project will leverage existing FIA and vegetation mapping data (GNN, <https://lemma.forestry.oregonstate.edu/>), and associated spatial mortality vulnerability models, to quantify the status, trends, and vulnerability of this critical species across its range. Furthermore, we will develop a unique tree-ring dataset across the climate niche-space of sugar pine to independently validate vulnerability models and quantify tree growth responses to climate and other change drivers. This project aligns with two PNWRS priorities (Priority B - science to manage for resilient landscapes and provide ecosystem services, Priority D - science to monitor and predict land stewardship and disturbance outcomes). Much of the range of sugar pine within Oregon falls west of the Cascade crest, so the impacts of fire, insects, and disease on sugar pine populations will directly relate to the Westside Fire Initiative. Sugar pine's range also includes many fire-risk watersheds in the USFS 10-year fire plan (FS--1187b), while inventory and threat assessment of old growth sugar pine forests directly addresses Sections 2a-b of Executive Order 14072.
+
+Understanding the status, trends, and vulnerability of sugar pine across its range is needed to inform regional policy and local decision-making regarding management activities (e.g., planting, thinning, prescribed burning) to mitigate biotic and climatic stressors. The intended outcome of this work is to provide and distribute a regional synthesis of status, trends, and vulnerability that is spatially scalable down to individual firesheds. Open access to mapped products and targeted workshops will focus on disseminating translatable science to regional partners and stakeholders. The work will be conducted via a combination of statistical analysis of existing FIA and remotely sensed data, as well as field data collection and laboratory processing of tree-ring samples. The statistical modelling will occur at the CFSL, field work will be conducted throughout the range of sugar pine in Oregon and California, and tree-ring sample processing will occur at the Oregon State University Tree-Ring Laboratory.
+
+**Fall 2023 update**
+
+Since we received funding, we've collected tree ring samples from \~30 sugar pine populations selected to span the climate space occupied by the species. These samples are currently being processed by the OSU tree-ring laboratory. This document does not analyse or address these samples; rather, it is focused on large-scale FIA-based assessments of mortality, regeneration, and other status/trends metrics.
+
+### Data loading and processing {.tabset}
+
+#### FIA data
+
+```{r fia.data, echo=T}
+
+all.fia <- readFIA(dir = "/Users/DanielPerret/Box/01. daniel.perret Workspace/fia_data_082123/",
+                   common=T, states=c("OR","NV","CA"))
+
+exact.coords <- read.csv("D:/coords_format.csv",header=T) %>% 
+  select(PLT_CN = ID1,
+         LAT_EXACT = lat,
+         LON_EXACT = long)
+
+
+all.fia$PLOT <- all.fia$PLOT %>% 
+  mutate(pltID = paste(UNITCD,STATECD,COUNTYCD,PLOT,sep="_"),
+         PLT_CN = CN,
+         ECOSUBCD = trimws(ECOSUBCD),
+         state_key = case_when(STATECD == 41 ~ "OR",
+                               STATECD == 6 ~ "CA",
+                               STATECD == 32 ~ "NV")) %>% 
+  group_by(pltID) %>% 
+  mutate(most.recent = ifelse(MEASYEAR==max(MEASYEAR),"yes","no")) %>% 
+  ungroup() %>% 
+  left_join(exact.coords,
+            by="PLT_CN")
+
+all.fia$COND <- all.fia$COND %>% 
+  left_join(all.fia$PLOT %>% 
+              select(PLT_CN,most.recent),
+            by="PLT_CN") %>% 
+  mutate(state_key = case_when(STATECD == 41 ~ "OR",
+                               STATECD == 6 ~ "CA",
+                               STATECD == 32 ~ "NV"))
+
+#creating fields and updating all SPCDs to most-recently ID'd SPCD
+all.fia$TREE <- all.fia$TREE %>% 
+  left_join(all.fia$PLOT %>% 
+              select(PLT_CN,most.recent),
+            by="PLT_CN") %>% 
+  mutate(TRE_CN = CN,
+         state_key = case_when(STATECD == 41 ~ "OR",
+                               STATECD == 6 ~ "CA",
+                               STATECD == 32 ~ "NV"),
+         agent_key = case_when(STATUSCD==2 & AGENTCD %in% c(00,70) ~ "unknown1",
+                               STATUSCD==2 & AGENTCD == 10 ~ "insect",
+                               STATUSCD==2 & AGENTCD == 20 ~ "disease",
+                               STATUSCD==2 & AGENTCD == 30 ~ "fire",
+                               STATUSCD==2 & AGENTCD == 40 ~ "animal",
+                               STATUSCD==2 & AGENTCD == 50 ~ "weather",
+                               STATUSCD==2 & AGENTCD == 60 ~ "competition",
+                               STATUSCD==2 & AGENTCD == 80 ~ "land use",
+                               STATUSCD==2 & is.na(AGENTCD) & 
+                                 (PREV_STATUS_CD==1 | is.na(PREV_STATUS_CD)) ~ "unknown2")) %>% 
+  left_join(.,
+            all.fia$TREE %>% 
+              select(PREV_TRE_CN, SPCD) %>% 
+              rename(LATER_SPCD=SPCD),
+            by=c("TRE_CN"="PREV_TRE_CN")) %>% 
+  mutate(SPCD = case_when(SPCD!=LATER_SPCD & !is.na(LATER_SPCD) ~ LATER_SPCD,
+                          is.na(LATER_SPCD) ~ SPCD,
+                          TRUE ~ SPCD))
+
+# some summary dataframes for convenience
+pila.trees <- all.fia$TREE %>% 
+  filter(SPCD == 117)
+
+all.fia$PLOT <- all.fia$PLOT %>% 
+  mutate(pila.pres = ifelse(PLT_CN %in% unique(pila.trees$PLT_CN),
+                            1,0))
+
+pila.plots <- all.fia$PLOT %>% filter(pila.pres==1)
+
+plot.summary <- all.fia$TREE %>% 
+  filter(most.recent == "yes",
+         PLT_CN %in% pila.plots$PLT_CN,
+         STATUSCD %in% 1:2
+  ) %>%
+  mutate(focal = ifelse(SPCD == "117", "pila", "nonpila"),
+         status = ifelse(STATUSCD == 1, "live","dead"),
+         DIAcm = DIA*2.54,
+         BAcm = pi*(DIAcm/2)^2,
+         BAcm.pa = BAcm*TPA_UNADJ) %>% 
+  group_by(PLT_CN, focal, status) %>% 
+  summarise(BAcm = sum(BAcm,na.rm=T),
+            meanBAcm = mean(BAcm,na.rm=T),
+            BAcm.pa = sum(BAcm.pa,na.rm=T),
+            stems = n(),
+            stems.pa = sum(TPA_UNADJ,na.rm=T)) %>%
+  ungroup() %>% 
+  pivot_wider(.,
+              names_from = c(focal,status),
+              names_glue = "{focal}.{status}.{.value}",
+              values_from = c(BAcm, meanBAcm, BAcm.pa, stems, stems.pa),
+              values_fill = 0) %>% 
+  mutate(pila.tot.stems.pa = pila.live.stems.pa+pila.dead.stems.pa,
+         pila.tot.BAcm.pa = pila.live.BAcm.pa+pila.dead.BAcm.pa,
+         pila.live.stems.prop = pila.live.stems.pa/pila.tot.stems.pa,
+         pila.live.BAcm.prop = pila.live.BAcm.pa/pila.tot.BAcm.pa,
+         
+         nonpila.tot.stems.pa = nonpila.live.stems.pa+nonpila.dead.stems.pa,
+         nonpila.tot.BAcm.pa = nonpila.live.BAcm.pa+nonpila.dead.BAcm.pa,
+         nonpila.live.stems.prop = nonpila.live.stems.pa/nonpila.tot.stems.pa,
+         nonpila.live.BAcm.prop = nonpila.live.BAcm.pa/nonpila.tot.BAcm.pa,
+         
+         tot.stems.pa = pila.tot.stems.pa + nonpila.tot.stems.pa,
+         tot.BAcm.pa = pila.tot.BAcm.pa + nonpila.tot.BAcm.pa) %>% 
+  left_join(., pila.plots,
+            by = "PLT_CN")
+
+tree.rmsr <- all.fia$TREE %>% 
+  filter(PREV_TRE_CN %in% TRE_CN,
+         PREV_STATUS_CD == 1,
+         STATUSCD != 0)
+
+pila.rmsr <- pila.trees %>% 
+  filter(PREV_STATUS_CD == 1,
+         STATUSCD != 0) %>% 
+  group_by(PLT_CN) %>% 
+  summarise(n.rmsr = n(),
+            n.mort = sum(STATUSCD == 2),
+            n.surv = sum(STATUSCD == 1),
+            n.harv = sum(STATUSCD == 3),
+            mort.prop = n.mort/n.rmsr,
+            surv.prop = n.surv/n.rmsr,
+            harv.prop = n.harv/n.rmsr) %>% 
+  left_join(plot.summary,
+            by = "PLT_CN") %>%
+  filter(!is.na(REMPER)) %>% 
+  mutate(ann.rate = 1-(1-mort.prop)^(1/REMPER))
+
+```
+
+#### Climate data
+
+```{r climate.data, echo=T}
+# clim.norms <- read.csv("D:/coords_format_Normal_1981_2010Y.csv", header=T) %>% 
+#   select(PLT_CN=ID1,
+#          MAT,
+#          MAP,
+#          DD5,
+#          CMD,
+#          CMI,
+#          FFP) %>% 
+#   mutate(MAT = ifelse(MAT==-9999, NA_real_, MAT))
+# 
+# clim.ann <- read.csv("D:/coords_format_1901-2021Y.csv", header=T)
+# 
+# clim.remper <- clim.ann %>%
+#   select(PLT_CN=ID1,
+#          Year, 7:31) %>% 
+#   mutate(across(where(is.numeric), .fns = ~ifelse(.x==-9999,NA_real_,.x))) %>% 
+#   left_join(all.fia$PLOT %>% 
+#               mutate(REMPER_END = MEASYEAR,
+#                      REMPER_START = MEASYEAR-round(REMPER,digits=0)) %>% 
+#               select(PLT_CN, REMPER_END, REMPER_START)) %>% 
+#   mutate(REMPER_START = ifelse(is.na(REMPER_START), REMPER_END, REMPER_START),
+#          across(3:27, .fns = ~ifelse(Year %in% c(REMPER_START:REMPER_END), .x, NA_real_))) %>%
+#   group_by(PLT_CN) %>% 
+#   summarise(across(MAT:DD1040, ~mean(.x,na.rm=T), .names="{.col}_remper"))
+# 
+# clim.base <- clim.ann %>%
+#   select(PLT_CN=ID1,
+#          Year, 7:31) %>% 
+#   filter(Year %in% 1900:1950) %>% 
+#   mutate(across(where(is.numeric), .fns = ~ifelse(.x==-9999,NA_real_,.x))) %>% 
+#   group_by(PLT_CN) %>% 
+#   summarise(across(MAT:DD1040, ~mean(.x,na.rm=T), .names = "{.col}_base"))
+# 
+# clim.recent <- clim.ann %>%
+#   select(PLT_CN=ID1,
+#          Year, 7:31) %>% 
+#   filter(Year %in% 2010:2021) %>% 
+#   mutate(across(where(is.numeric), .fns = ~ifelse(.x==-9999,NA_real_,.x))) %>% 
+#   group_by(PLT_CN) %>% 
+#   summarise(across(MAT:DD1040, ~mean(.x,na.rm=T), .names = "{.col}_recent"))
+# 
+# write.csv(clim.norms, file = "clim_norms.csv", row.names = F)
+# write.csv(clim.base, file = "clim_base.csv", row.names = F)
+# write.csv(clim.remper, file = "clim_remper.csv", row.names = F)
+# write.csv(clim.recent, file = "clim_recent.csv", row.names = F)
+
+## Only re-run climate processing code if something needs to be changed! It takes forever to run!
+
+clim.norms <- read.csv("clim_norms.csv",header=T,stringsAsFactors=F)
+clim.base <- read.csv("clim_base.csv", header=T, stringsAsFactors=F)
+clim.remper <- read.csv("clim_remper.csv",header=T,stringsAsFactors=F)
+clim.recent <- read.csv("clim_recent.csv",header=T,stringsAsFactors=F)
+
+all.fia$PLOT <- all.fia$PLOT %>% 
+  left_join(clim.norms,
+            by="PLT_CN") %>%
+  left_join(clim.remper,
+            by="PLT_CN") %>%
+  left_join(clim.base,
+            by="PLT_CN") %>%
+  left_join(clim.recent,
+            by="PLT_CN") %>% 
+  mutate(REMPER_END = MEASYEAR,
+         REMPER_START = MEASYEAR-round(REMPER,digits=0),
+         REMPER_PER = length(REMPER_START:REMPER_END))
+```
+
+#### Spatial data
+
+```{r spatial.data, echo=T}
+
+old.proj <- '+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs'
+
+base.proj <- "+proj=aea +lat_0=23 +lon_0=-96 +lat_1=29.5 +lat_2=45.5 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs"
+
+states <- readOGR(dsn="/Users/DanielPerret/Box/01. daniel.perret Workspace/base_spatialdata/state_boundaries",
+                  layer = "state_boundaries", verbose=F) %>% 
+  spTransform(., CRSobj = CRS(base.proj))
+
+or <- states %>% 
+  sf::st_as_sf() %>%
+  filter(STATE=="OR")
+
+n.ca <- states %>% 
+  sf::st_as_sf() %>%
+  filter(STATE=="CA") %>% 
+  sf::st_transform(crs = CRS(old.proj)) %>% 
+  sf::st_crop(x = .,xmin = -124.4112,  ymin = 38.5, 
+              xmax = -114.1295, ymax = 42.00983) %>% 
+  sf::st_transform(.,crs = CRS(base.proj))
+
+s.ca <- states %>% 
+  sf::st_as_sf() %>%
+  filter(STATE=="CA") %>% 
+  sf::st_transform(crs = CRS(old.proj)) %>% 
+  sf::st_crop(x = .,xmin = -124.4112,  ymin = 32.53043, 
+              xmax = -114.1295, ymax = 38.5) %>% 
+  sf::st_transform(.,crs = CRS(base.proj))
+
+cont <- readOGR(dsn="/Users/DanielPerret/Box/01. daniel.perret Workspace/base_spatialdata/continents",
+                layer = "na",
+                verbose=F,
+                p4s = old.proj) %>% 
+  spTransform(., CRSobj = CRS(base.proj))
+
+range <- readOGR(dsn="/Users/DanielPerret/Box/01. daniel.perret Workspace/base_spatialdata/named_ranges",
+                 layer = "lambertiana",
+                 verbose = F,
+                 p4s = old.proj) %>% 
+  spTransform(., CRSobj = CRS(base.proj))
+
+er4 <- readOGR(dsn="/Users/DanielPerret/Box/01. daniel.perret Workspace/base_spatialdata/cleland_usfs_ecoregions",
+               layer = "S_USA.EcomapSubsections",
+               verbose=F) %>% 
+  spTransform(., CRSobj = CRS(base.proj))
+
+er3 <- readOGR(dsn="/Users/DanielPerret/Box/01. daniel.perret Workspace/base_spatialdata/cleland_usfs_ecoregions",
+               layer = "S_USA.EcomapSections",
+               verbose=F) %>% 
+  spTransform(., CRSobj = CRS(base.proj))
+
+er2 <- readOGR(dsn="/Users/DanielPerret/Box/01. daniel.perret Workspace/base_spatialdata/cleland_usfs_ecoregions",
+               layer = "S_USA.EcoMapProvinces",
+               verbose=F) %>% 
+  spTransform(., CRSobj = CRS(base.proj))
+
+er4.pila <- er4[pila.sp,] %>% sf::st_as_sf()
+er3.pila <- er3[pila.sp,] %>% sf::st_as_sf()
+er2.pila <- er2[pila.sp,] %>% sf::st_as_sf()
+
+pila.sp <- pila.sp %>% sf::st_as_sf()
+
+range.buff <- raster::buffer(x=range,width=30000)
+buff.ext <- extent(range.buff)
+
+```

@@ -1,0 +1,2325 @@
+---
+title: "PILA_preliminary"
+author: "D. Perret"
+output: 
+  rmdformats::robobook:
+    code_folding: hide
+    self_contained: true
+editor_options: 
+  chunk_output_type: console
+---
+
+```{css zoom-lib-src, echo = FALSE, eval=F}
+script src = "https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"
+```
+
+```{js zoom-jquery, echo = FALSE, eval=F}
+$(document).ready(function() {
+$('body').prepend('<div class=\"zoomDiv\"><img src=\"\" class=\"zoomImg\"></div>');
+// onClick function for all plots (img's)
+$('img:not(.zoomImg)').click(function() {
+$('.zoomImg').attr('src', $(this).attr('src')).css({width: '100x%'});
+$('.zoomDiv').css({opacity: '1', width: 'auto', border: '1px solid white', borderRadius: '5px', position: 'fixed', top: '50%', left: '50%', marginRight: '-50%', transform: 'translate(-50%, -50%)', boxShadow: '0px 0px 50px #888888', zIndex: '50', overflow: 'auto', maxHeight: '100%'});
+});
+// onClick function for zoomImg
+$('img.zoomImg').click(function() {
+$('.zoomDiv').css({opacity: '0', width: '0%'}); 
+});
+});
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      prompt = FALSE,
+                      error = TRUE,
+                      message = FALSE,
+                      cache = FALSE,
+                      cache.lazy = FALSE,
+                      eval = TRUE,
+                      eval.after = "fig.cap")
+
+library(rmarkdown)
+library(tidyverse)
+library(rFIA)
+library(ggplot2)
+library(ggExtra)
+library(rgdal)
+library(sp)
+library(ggsci)
+library(raster)
+library(splines)
+library(lme4)
+library(patchwork)
+library(ade4)
+library(adehabitatHR)
+library(leaflet)
+
+select <- dplyr::select
+
+theme_set(theme_bw())
+theme_update(text = element_text(size=16, color = "black"),
+             panel.grid.major = element_blank(),
+             panel.grid.minor = element_blank(),
+             strip.background = element_blank(),
+             panel.border=element_rect(size=1.5))
+
+source("/Users/DanielPerret/Box/01. daniel.perret Workspace/PROJECTS/status_trends/growMort_rewrite.R")
+
+
+```
+
+## Intro/context
+
+The following text is pulled from the FY23 Project Narrative:
+
+**Description/Justification**
+
+Sugar pine (Pinus lambertiana) provides high-value regulating, provisioning, cultural, and supporting ecosystem services across its distribution in Oregon and California. However, a host of stressors (historical logging of large old trees, fire exclusion, introduced pathogens, endemic bark beetles, and climate change) have driven widespread declines in sugar pine populations across much of its range. Despite this, there are no existing range-wide assessments of the status (current conditions), demographic trends (recruitment, growth, and mortality), or mortality vulnerability of sugar pine. This project will leverage existing FIA and vegetation mapping data (GNN, <https://lemma.forestry.oregonstate.edu/>), and associated spatial mortality vulnerability models, to quantify the status, trends, and vulnerability of this critical species across its range. Furthermore, we will develop a unique tree-ring dataset across the climate niche-space of sugar pine to independently validate vulnerability models and quantify tree growth responses to climate and other change drivers. This project aligns with two PNWRS priorities (Priority B - science to manage for reslient landscapes and provide ecosystem services, Priority D - science to monitor and predict land stewardship and disturbance outcomes). Much of the range of sugar pine within Oregon falls west of the Cascade crest, so the impacts of fire, insects, and disease on sugar pine populations will directly relate to the Westside Fire Initiative. Sugar pine's range also includes many fire-risk watersheds in the USFS 10-year fire plan (FS--1187b), while inventory and threat assessment of old growth sugar pine forests directly addresses Sections 2a-b of Executive Order 14072.
+
+Understanding the status, trends, and vulnerability of sugar pine across its range is needed to inform regional policy and local decision-making regarding management activities (e.g., planting, thinning, prescribed burning) to mitigate biotic and climatic stressors. The intended outcome of this work is to provide and distribute a regional synthesis of status, trends, and vulnerability that is spatially scalable down to individual firesheds. Open access to mapped products and targeted workshops will focus on disseminating translatable science to regional partners and stakeholders. The work will be conducted via a combination of statistical analysis of existing FIA and remotely sensed data, as well as field data collection and laboratory processing of tree-ring samples. The statistical modelling will occur at the CFSL, field work will be conducted throughout the range of sugar pine in Oregon and California, and tree-ring sample processing will occur at the Oregon State University Tree-ring laboratory.
+
+### Data and setup code {.tabset}
+
+#### --
+
+#### FIA data
+
+```{r fia.data, echo=T}
+
+all.fia <- readFIA(dir = "/Users/DanielPerret/Box/01. daniel.perret Workspace/fia_data_082123/",
+                   common=T, states=c("OR","NV","CA"))
+
+exact.coords <- read.csv("D:/coords_format.csv",header=T) %>% 
+  select(PLT_CN = ID1,
+         LAT_EXACT = lat,
+         LON_EXACT = long)
+
+
+all.fia$PLOT <- all.fia$PLOT %>% 
+  mutate(pltID = paste(UNITCD,STATECD,COUNTYCD,PLOT,sep="_"),
+         PLT_CN = CN,
+         ECOSUBCD = trimws(ECOSUBCD),
+         state_key = case_when(STATECD == 41 ~ "OR",
+                               STATECD == 6 ~ "CA",
+                               STATECD == 32 ~ "NV")) %>% 
+  group_by(pltID) %>% 
+  mutate(most.recent = ifelse(MEASYEAR==max(MEASYEAR),"yes","no")) %>% 
+  ungroup() %>% 
+  left_join(exact.coords,
+            by="PLT_CN")
+
+all.fia$COND <- all.fia$COND %>% 
+  left_join(all.fia$PLOT %>% 
+              select(PLT_CN,most.recent),
+            by="PLT_CN") %>% 
+  mutate(state_key = case_when(STATECD == 41 ~ "OR",
+                               STATECD == 6 ~ "CA",
+                               STATECD == 32 ~ "NV"))
+
+#creating fields and updating all SPCDs to most-recently ID'd SPCD
+all.fia$TREE <- all.fia$TREE %>% 
+  left_join(all.fia$PLOT %>% 
+              select(PLT_CN,most.recent),
+            by="PLT_CN") %>% 
+  mutate(TRE_CN = CN,
+         state_key = case_when(STATECD == 41 ~ "OR",
+                               STATECD == 6 ~ "CA",
+                               STATECD == 32 ~ "NV"),
+         agent_key = case_when(STATUSCD==2 & AGENTCD %in% c(00,70) ~ "unknown1",
+                               STATUSCD==2 & AGENTCD == 10 ~ "insect",
+                               STATUSCD==2 & AGENTCD == 20 ~ "disease",
+                               STATUSCD==2 & AGENTCD == 30 ~ "fire",
+                               STATUSCD==2 & AGENTCD == 40 ~ "animal",
+                               STATUSCD==2 & AGENTCD == 50 ~ "weather",
+                               STATUSCD==2 & AGENTCD == 60 ~ "competition",
+                               STATUSCD==2 & AGENTCD == 80 ~ "land use",
+                               STATUSCD==2 & is.na(AGENTCD) & 
+                                 (PREV_STATUS_CD==1 | is.na(PREV_STATUS_CD)) ~ "unknown2")) %>% 
+  left_join(.,
+            all.fia$TREE %>% 
+              select(PREV_TRE_CN, SPCD) %>% 
+              rename(LATER_SPCD=SPCD),
+            by=c("TRE_CN"="PREV_TRE_CN")) %>% 
+  mutate(SPCD = case_when(SPCD!=LATER_SPCD & !is.na(LATER_SPCD) ~ LATER_SPCD,
+                          is.na(LATER_SPCD) ~ SPCD,
+                          TRUE ~ SPCD))
+
+# some summary dataframes for convenience
+pila.trees <- all.fia$TREE %>% 
+  filter(SPCD == 117)
+
+all.fia$PLOT <- all.fia$PLOT %>% 
+  mutate(pila.pres = ifelse(PLT_CN %in% unique(pila.trees$PLT_CN),
+                            1,0))
+
+pila.plots <- all.fia$PLOT %>% filter(pila.pres==1)
+
+plot.summary <- all.fia$TREE %>% 
+  filter(most.recent == "yes",
+         PLT_CN %in% pila.plots$PLT_CN,
+         STATUSCD %in% 1:2
+  ) %>%
+  mutate(focal = ifelse(SPCD == "117", "pila", "nonpila"),
+         status = ifelse(STATUSCD == 1, "live","dead"),
+         DIAcm = DIA*2.54,
+         BAcm = pi*(DIAcm/2)^2,
+         BAcm.pa = BAcm*TPA_UNADJ) %>% 
+  group_by(PLT_CN, focal, status) %>% 
+  summarise(BAcm = sum(BAcm,na.rm=T),
+            meanBAcm = mean(BAcm,na.rm=T),
+            BAcm.pa = sum(BAcm.pa,na.rm=T),
+            stems = n(),
+            stems.pa = sum(TPA_UNADJ,na.rm=T)) %>%
+  ungroup() %>% 
+  pivot_wider(.,
+              names_from = c(focal,status),
+              names_glue = "{focal}.{status}.{.value}",
+              values_from = c(BAcm, meanBAcm, BAcm.pa, stems, stems.pa),
+              values_fill = 0) %>% 
+  mutate(pila.tot.stems.pa = pila.live.stems.pa+pila.dead.stems.pa,
+         pila.tot.BAcm.pa = pila.live.BAcm.pa+pila.dead.BAcm.pa,
+         pila.live.stems.prop = pila.live.stems.pa/pila.tot.stems.pa,
+         pila.live.BAcm.prop = pila.live.BAcm.pa/pila.tot.BAcm.pa,
+         
+         nonpila.tot.stems.pa = nonpila.live.stems.pa+nonpila.dead.stems.pa,
+         nonpila.tot.BAcm.pa = nonpila.live.BAcm.pa+nonpila.dead.BAcm.pa,
+         nonpila.live.stems.prop = nonpila.live.stems.pa/nonpila.tot.stems.pa,
+         nonpila.live.BAcm.prop = nonpila.live.BAcm.pa/nonpila.tot.BAcm.pa,
+         
+         tot.stems.pa = pila.tot.stems.pa + nonpila.tot.stems.pa,
+         tot.BAcm.pa = pila.tot.BAcm.pa + nonpila.tot.BAcm.pa) %>% 
+  left_join(., pila.plots,
+            by = "PLT_CN")
+
+tree.rmsr <- all.fia$TREE %>% 
+  filter(PREV_TRE_CN %in% TRE_CN,
+         PREV_STATUS_CD == 1,
+         STATUSCD != 0)
+
+pila.rmsr <- pila.trees %>% 
+  filter(PREV_STATUS_CD == 1,
+         STATUSCD != 0) %>% 
+  group_by(PLT_CN) %>% 
+  summarise(n.rmsr = n(),
+            n.mort = sum(STATUSCD == 2),
+            n.surv = sum(STATUSCD == 1),
+            n.harv = sum(STATUSCD == 3),
+            mort.prop = n.mort/n.rmsr,
+            surv.prop = n.surv/n.rmsr,
+            harv.prop = n.harv/n.rmsr) %>% 
+  left_join(plot.summary,
+            by = "PLT_CN") %>%
+  filter(!is.na(REMPER)) %>% 
+  mutate(ann.rate = 1-(1-mort.prop)^(1/REMPER))
+
+```
+
+#### Climate data
+
+```{r climate.data, echo=T}
+# clim.norms <- read.csv("D:/coords_format_Normal_1981_2010Y.csv", header=T) %>% 
+#   select(PLT_CN=ID1,
+#          MAT,
+#          MAP,
+#          DD5,
+#          CMD,
+#          CMI,
+#          FFP) %>% 
+#   mutate(MAT = ifelse(MAT==-9999, NA_real_, MAT))
+# 
+# clim.ann <- read.csv("D:/coords_format_1901-2021Y.csv", header=T)
+# 
+# clim.remper <- clim.ann %>%
+#   select(PLT_CN=ID1,
+#          Year, 7:31) %>% 
+#   mutate(across(where(is.numeric), .fns = ~ifelse(.x==-9999,NA_real_,.x))) %>% 
+#   left_join(all.fia$PLOT %>% 
+#               mutate(REMPER_END = MEASYEAR,
+#                      REMPER_START = MEASYEAR-round(REMPER,digits=0)) %>% 
+#               select(PLT_CN, REMPER_END, REMPER_START)) %>% 
+#   mutate(REMPER_START = ifelse(is.na(REMPER_START), REMPER_END, REMPER_START),
+#          across(3:27, .fns = ~ifelse(Year %in% c(REMPER_START:REMPER_END), .x, NA_real_))) %>%
+#   group_by(PLT_CN) %>% 
+#   summarise(across(MAT:DD1040, ~mean(.x,na.rm=T), .names="{.col}_remper"))
+# 
+# clim.base <- clim.ann %>%
+#   select(PLT_CN=ID1,
+#          Year, 7:31) %>% 
+#   filter(Year %in% 1900:1950) %>% 
+#   mutate(across(where(is.numeric), .fns = ~ifelse(.x==-9999,NA_real_,.x))) %>% 
+#   group_by(PLT_CN) %>% 
+#   summarise(across(MAT:DD1040, ~mean(.x,na.rm=T), .names = "{.col}_base"))
+# 
+# clim.recent <- clim.ann %>%
+#   select(PLT_CN=ID1,
+#          Year, 7:31) %>% 
+#   filter(Year %in% 2010:2021) %>% 
+#   mutate(across(where(is.numeric), .fns = ~ifelse(.x==-9999,NA_real_,.x))) %>% 
+#   group_by(PLT_CN) %>% 
+#   summarise(across(MAT:DD1040, ~mean(.x,na.rm=T), .names = "{.col}_recent"))
+# 
+# write.csv(clim.norms, file = "clim_norms.csv", row.names = F)
+# write.csv(clim.base, file = "clim_base.csv", row.names = F)
+# write.csv(clim.remper, file = "clim_remper.csv", row.names = F)
+# write.csv(clim.recent, file = "clim_recent.csv", row.names = F)
+
+## Only re-run climate processing code if something needs to be changed! It takes forever to run!
+
+clim.norms <- read.csv("clim_norms.csv",header=T,stringsAsFactors=F)
+clim.base <- read.csv("clim_base.csv", header=T, stringsAsFactors=F)
+clim.remper <- read.csv("clim_remper.csv",header=T,stringsAsFactors=F)
+clim.recent <- read.csv("clim_recent.csv",header=T,stringsAsFactors=F)
+
+all.fia$PLOT <- all.fia$PLOT %>% 
+  left_join(clim.norms,
+            by="PLT_CN") %>%
+  left_join(clim.remper,
+            by="PLT_CN") %>%
+  left_join(clim.base,
+            by="PLT_CN") %>%
+  left_join(clim.recent,
+            by="PLT_CN") %>% 
+  mutate(REMPER_END = MEASYEAR,
+         REMPER_START = MEASYEAR-round(REMPER,digits=0),
+         REMPER_PER = length(REMPER_START:REMPER_END))
+```
+
+#### Spatial data
+
+```{r spatial.data, echo=T}
+
+old.proj <- '+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs'
+
+base.proj <- "+proj=aea +lat_0=23 +lon_0=-96 +lat_1=29.5 +lat_2=45.5 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs"
+
+states <- readOGR(dsn="/Users/DanielPerret/Box/01. daniel.perret Workspace/base_spatialdata/state_boundaries",
+                  layer = "state_boundaries", verbose=F) %>% 
+  spTransform(., CRSobj = CRS(base.proj))
+
+or <- states %>% 
+  sf::st_as_sf() %>%
+  filter(STATE=="OR")
+
+n.ca <- states %>% 
+  sf::st_as_sf() %>%
+  filter(STATE=="CA") %>% 
+  sf::st_transform(crs = CRS(old.proj)) %>% 
+  sf::st_crop(x = .,xmin = -124.4112,  ymin = 38.5, 
+              xmax = -114.1295, ymax = 42.00983) %>% 
+  sf::st_transform(.,crs = CRS(base.proj))
+
+s.ca <- states %>% 
+  sf::st_as_sf() %>%
+  filter(STATE=="CA") %>% 
+  sf::st_transform(crs = CRS(old.proj)) %>% 
+  sf::st_crop(x = .,xmin = -124.4112,  ymin = 32.53043, 
+              xmax = -114.1295, ymax = 38.5) %>% 
+  sf::st_transform(.,crs = CRS(base.proj))
+
+
+
+cont <- readOGR(dsn="/Users/DanielPerret/Box/01. daniel.perret Workspace/base_spatialdata/continents",
+                layer = "na",
+                verbose=F,
+                p4s = old.proj) %>% 
+  spTransform(., CRSobj = CRS(base.proj))
+
+range <- readOGR(dsn="/Users/DanielPerret/Box/01. daniel.perret Workspace/base_spatialdata/named_ranges",
+                 layer = "lambertiana",
+                 verbose = F,
+                 p4s = old.proj) %>% 
+  spTransform(., CRSobj = CRS(base.proj))
+
+usfs <- readOGR(dsn="/Users/DanielPerret/Box/01. daniel.perret Workspace/base_spatialdata/sma_shp",
+                layer = "usfs",
+                verbose=F) %>% 
+  spTransform(., CRSobj = CRS(old.proj)) %>% #leaving this in old.proj for leaflet purposes
+  crop(., range %>% 
+         spTransform(., CRSobj = CRS(old.proj)))
+
+pila.sp <- pila.plots %>% 
+  SpatialPointsDataFrame(coords = .[,c("LON","LAT")],
+                         data = .,
+                         proj4string = CRS(old.proj)) %>% 
+  spTransform(., CRSobj = CRS(base.proj))
+
+er4 <- readOGR(dsn="/Users/DanielPerret/Box/01. daniel.perret Workspace/base_spatialdata/cleland_usfs_ecoregions",
+               layer = "S_USA.EcomapSubsections",
+               verbose=F) %>% 
+  spTransform(., CRSobj = CRS(base.proj))
+
+er3 <- readOGR(dsn="/Users/DanielPerret/Box/01. daniel.perret Workspace/base_spatialdata/cleland_usfs_ecoregions",
+               layer = "S_USA.EcomapSections",
+               verbose=F) %>% 
+  spTransform(., CRSobj = CRS(base.proj))
+
+er2 <- readOGR(dsn="/Users/DanielPerret/Box/01. daniel.perret Workspace/base_spatialdata/cleland_usfs_ecoregions",
+               layer = "S_USA.EcoMapProvinces",
+               verbose=F) %>% 
+  spTransform(., CRSobj = CRS(base.proj))
+
+er4.pila <- er4[pila.sp,] %>% sf::st_as_sf()
+er3.pila <- er3[pila.sp,] %>% sf::st_as_sf()
+er2.pila <- er2[pila.sp,] %>% sf::st_as_sf()
+
+pila.sp <- pila.sp %>% sf::st_as_sf()
+
+range.buff <- raster::buffer(x=range,width=30000)
+buff.ext <- extent(range.buff)
+
+```
+
+#### Sampling sites
+
+From collaborators:
+
+```{r}
+
+collabs <- read.csv("/Users/DanielPerret/Box/SugarPine/PILA_existing_core_collections.csv",
+                    header=T) %>% 
+  select(PI, 
+         LON = Longitude, 
+         LAT = Latitude,
+         Location,
+         Comments) %>% 
+  na.omit()
+
+```
+
+Completed sampling sites (approximate coordinates):
+
+```{r}
+
+done.sites <- read.csv("FIELD_DATA/S123_071823/Form_3_0.csv", header=T) %>% 
+  select(SITEID = Site.ID,
+         ZONE = Niche.zone,
+         STATE = State,
+         LON = x,
+         LAT = y,
+         FOREST = National.Forest,
+         Site.Locality, Tree.Number, Name, Date)
+
+```
+
+Remaining sampling sites:
+
+```{r}
+
+all.sites <- read.csv("pila_sites2023_remaining081623.csv",header=T)
+
+# or.sites <- read.csv("sites_OR.csv",header=T)
+# 
+# nca.sites <- read.csv("sites_nCA.csv", header=T)
+# 
+# sca.sites <- read.csv("sites_sCA.csv", header=T)
+
+```
+
+#### Pulling in disturbance and GNN layers
+
+```{r}
+
+mtbs <- readOGR(dsn = "dist_data", layer = "mtbs_perims_pila_buff") %>%
+  spTransform(., CRSobj = CRS(base.proj))
+
+recent.mtbs <- readOGR(dsn="dist_data", layer="fire_perimeters") %>% 
+  spTransform(., CRSobj = CRS(base.proj)) %>% 
+  crop(.,buff.ext)
+
+
+# Oregon
+fast.change.or <- raster("dist_data/fast_reclass.tif") %>% 
+  crop(.,or %>% 
+         sf::st_transform(CRS(old.proj)))
+fast.change.or.post2010 <- fast.change.or
+fast.change.or.post2010[fast.change.or.post2010<2010] <- NA
+fast.change.or.post2010 <- aggregate(x=fast.change.or.post2010,
+                                     fact = 25,
+                                     na.rm=FALSE,
+                                     fun = function(x, na.rm=FALSE){
+                                       vals <- unique(x)
+                                       return(vals[which.max(tabulate(match(x,vals)))])
+                                     })
+fast.or.post2010poly <- rasterToPolygons(x = fast.change.or.post2010,
+                                         dissolve=T)
+
+gnn.or <- raster("GNN_output/rasters/pila_ba_2017_wgs84.tif") %>% 
+  crop(.,or %>% 
+         sf::st_transform(CRS(old.proj))) %>% 
+  raster::mask(.,
+               mask = raster::buffer(x=range,width=30000) %>% 
+                 spTransform(.,CRSobj = CRS(old.proj))) %>% 
+  aggregate(., fact = 25)
+gnn.or[gnn.or<=0] <- NA
+
+# Northern California
+fast.change.nca <- raster("dist_data/fast_reclass.tif") %>% 
+  crop(.,n.ca %>% 
+         sf::st_transform(CRS(old.proj)))
+fast.change.nca.post2010 <- fast.change.nca
+fast.change.nca.post2010[fast.change.nca.post2010<2010] <- NA
+fast.change.nca.post2010 <- aggregate(x=fast.change.nca.post2010,
+                                      fact = 25,
+                                      na.rm=FALSE,
+                                      fun = function(x, na.rm=FALSE){
+                                        vals <- unique(x)
+                                        return(vals[which.max(tabulate(match(x,vals)))])
+                                      })
+fast.nca.post2010poly <- rasterToPolygons(x = fast.change.nca.post2010,
+                                          dissolve=T)
+
+gnn.nca <- raster("GNN_output/rasters/pila_ba_2017_wgs84.tif") %>% 
+  crop(.,n.ca %>% 
+         sf::st_transform(CRS(old.proj))) %>% 
+  raster::mask(.,
+               mask = raster::buffer(x=range,width=30000) %>% 
+                 spTransform(.,CRSobj = CRS(old.proj))) %>% 
+  aggregate(., fact = 25)
+gnn.nca[gnn.nca<=0] <- NA
+
+# Southern California
+fast.change.sca <- raster("dist_data/fast_reclass.tif") %>% 
+  crop(.,s.ca %>% 
+         sf::st_transform(CRS(old.proj)))
+fast.change.sca.post2010 <- fast.change.sca
+fast.change.sca.post2010[fast.change.sca.post2010<2010] <- NA
+fast.change.sca.post2010 <- aggregate(x=fast.change.sca.post2010,
+                                      fact = 25,
+                                      na.rm=FALSE,
+                                      fun = function(x, na.rm=FALSE){
+                                        vals <- unique(x)
+                                        return(vals[which.max(tabulate(match(x,vals)))])
+                                      })
+fast.sca.post2010poly <- rasterToPolygons(x = fast.change.sca.post2010,
+                                          dissolve=T)
+
+gnn.sca <- raster("GNN_output/rasters/pila_ba_2017_wgs84.tif") %>% 
+  crop(.,s.ca %>% 
+         sf::st_transform(CRS(old.proj))) %>% 
+  raster::mask(.,
+               mask = raster::buffer(x=range,width=30000) %>% 
+                 spTransform(.,CRSobj = CRS(old.proj))) %>% 
+  aggregate(., fact = 25)
+gnn.sca[gnn.sca<=0] <- NA
+
+```
+
+------------------------------------------------------------------------
+
+## Basic plots and maps
+
+### Distributions {.tabset}
+
+#### --
+
+#### Plots
+
+```{r}
+mapcolor <- "wheat3"
+linecolor <- "gray40"
+pointcolor <- "firebrick2"
+
+
+ggplot() +
+  geom_sf(data = cont %>% 
+            as(.,"sf"),
+          col=linecolor,
+          fill = mapcolor) + 
+  geom_sf(data = states %>% 
+            as(.,"sf"),
+          fill=NA,
+          col=linecolor) +
+  geom_sf(data = range %>% 
+            raster::buffer(x=.,width=50000) %>% 
+            as(.,"sf"),
+          fill="gray") +
+  geom_sf(data = pila.sp,
+          pch=21,
+          col="black",
+          bg=pointcolor,
+          alpha=0.6, size = 3.5)+
+  geom_sf(data = states %>% 
+            as(.,"sf"),
+          fill=NA,
+          col=linecolor,
+          lty=2) +
+  theme(panel.background = element_rect(fill="skyblue1")) +
+  lims(x = c(-2.75e6, -1.25e6),
+       y = c(1.25e6,3e6)) +
+  theme(legend.position = "none")
+
+```
+
+#### Ecoregion subsections
+
+```{r}
+mapcolor <- "wheat3"
+linecolor <- "gray40"
+pointcolor <- "firebrick2"
+
+
+ggplot() +
+  geom_sf(data = cont %>% 
+            as(.,"sf"),
+          col=linecolor,
+          fill = mapcolor) + 
+  geom_sf(data = states %>% 
+            as(.,"sf"),
+          fill=NA,
+          col=linecolor) +
+  geom_sf(data = er4.pila,
+          col="firebrick4",
+          fill=pointcolor,
+          alpha=0.8)+
+  # geom_sf(data=pila.sp,
+  #         pch=19,
+  #         col="black",
+  #         alpha=0.1,
+  #         size=1.5)+
+  geom_sf(data = states %>% 
+            as(.,"sf"),
+          fill=NA,
+          col=linecolor,
+          lty=2) +
+  theme(panel.background = element_rect(fill="skyblue1")) +
+  lims(x = c(-2.75e6, -1.25e6),
+       y = c(1.25e6,3e6)) +
+  theme(legend.position = "none")
+
+```
+
+#### Climate space
+
+```{r}
+
+all.fia$PLOT %>% 
+  #filter(pila.pres==1) %>% 
+  ggplot(.,
+         aes(x = MAT_remper,
+             y = MAP_remper)) +
+  geom_point(pch=21,
+             col="black",
+             bg = "gray",
+             size=1,
+             alpha=0.3)+
+  geom_point(data = all.fia$PLOT %>% 
+               filter(pila.pres==1),
+             pch=21,
+             col="black",
+             bg = "firebrick2",
+             size=2.5,
+             alpha=0.7)+
+  labs(x = "Mean annual temperature",
+       y = "Mean annual precipitation")
+
+```
+
+#### Size distribution
+
+```{r}
+
+all.fia$TREE$newSize <- makeClasses(all.fia$TREE$DIA, interval = 5, numLabs=FALSE, lower = 5, upper = 150)
+
+tpasize.all <-  all.fia %>% 
+  clipFIA(.,
+          mostRecent=T) %>% 
+  tpa(.,
+      grpBy = c(STATUSCD,newSize),
+      treeDomain = SPCD==117,
+      totals = TRUE,
+      treeType = "all",
+      variance = T) %>% 
+  mutate(TREE_TOTAL_SD = sqrt(TREE_TOTAL_VAR),
+         status = ifelse(STATUSCD==1,"alive","dead"))
+
+tpasize.all %>%
+  mutate(newSize = ifelse(newSize == "[5,10)","[05,10)",newSize)) %>% 
+  ggplot(.,
+         aes(x = newSize,
+             y = TREE_TOTAL/1e6,
+             group = status)) +
+  geom_col(position=position_dodge(0.9),
+           col="black",
+           fill="firebrick2",
+           aes(alpha=status)) +
+  geom_errorbar(aes(ymin = (TREE_TOTAL - (TREE_TOTAL_SD*1.96))/1e6,
+                    ymax = (TREE_TOTAL + (TREE_TOTAL_SD*1.96))/1e6),
+                position=position_dodge(0.9),
+                width=0.3,
+                lwd=0.9)+
+  labs(x = "Size class (in)",
+       y = "Number of trees") +
+  theme(axis.text.x = element_text(angle=45,hjust=1,size=15),
+        legend.key.size = unit(1,"cm"),
+        strip.text.x=element_blank()) +
+  scale_y_continuous(labels = scales::comma,
+                     name = "Number of trees (millions)") +
+  scale_alpha_manual(values = c("alive" = 1,
+                                "dead" = 0.3))
+
+```
+
+### Population estimates {.tabset}
+
+#### code
+
+```{r change.code, echo=T}
+
+#evals <- c(41903,61903,321903)
+evals <- c(21903,41903,61903,81903,161903,301903,321903,351903,411903,491903,531903,561903)
+
+
+thresh <- 5
+
+## TPA change estimates for all species and all ecoregions
+
+#total tpa change for all species 
+dtpa.er.sp <- all.fia %>% 
+  growMort_dlp(db = .,
+               stateVar = "TPA",
+               polys = er4.pila %>% 
+                 select(MAP_UNIT_S,ACRES),
+               #areaDomain = pila.pres == 1,
+               grpBy = SPCD,
+               totals = TRUE,
+               returnSpatial = T, 
+               nCores = 4,
+               variance = T,
+               sizeThresh=thresh,
+               evals = evals,
+               method="TI") %>% 
+  group_by(MAP_UNIT_S) %>% 
+  filter(YEAR==max(YEAR))
+
+#total baa change for all species
+dbaa.er.sp <- all.fia %>% 
+  growMort_dlp(db = .,
+               stateVar = "BAA",
+               polys = er4.pila %>%
+                 sf::st_as_sf() %>% 
+                 select(MAP_UNIT_S,ACRES),
+               #areaDomain = pila.pres == 1,
+               grpBy = SPCD,
+               totals = TRUE,
+               returnSpatial = F, 
+               nCores = 4,
+               variance = T,
+               sizeThresh=thresh,
+               evals = evals,
+               method="TI") %>% 
+  group_by(MAP_UNIT_S) %>% 
+  filter(YEAR==max(YEAR))
+
+#combining TPA and BAA change estimates
+dall.er.sp <- left_join(dtpa.er.sp, dbaa.er.sp,
+                        suffix = c(".tpa",".baa"),
+                        by=c("MAP_UNIT_S","ACRES","polyID","SPCD","YEAR","N","nPlots_TREE","nPlots_AREA","AREA_TOTAL"))
+
+# total agent-specific mortality for all species
+dtpa.er.sp.agent <- all.fia %>% 
+  growMort_dlp(db = .,
+               stateVar = "TPA",
+               polys = er4.pila %>%
+                 sf::st_as_sf() %>% 
+                 select(MAP_UNIT_S,ACRES),
+               totals = TRUE,
+               grpBy = c(SPCD, agent_key),
+               returnSpatial = T, 
+               nCores = 4,
+               variance = T,
+               sizeThresh = thresh,
+               evals = evals,
+               method="TI") %>% 
+  group_by(MAP_UNIT_S) %>% 
+  filter(YEAR==max(YEAR))
+
+# summarising mortality and estimating recruitment
+mort.decomp.sp <- 
+  dtpa.er.sp %>% 
+  left_join(dtpa.er.sp.agent %>%
+              sf::st_drop_geometry() %>% 
+              group_by(MAP_UNIT_S,SPCD) %>% 
+              summarise(TOT_MORT = sum(CURR_TOTAL-PREV_TOTAL,na.rm=T)*-1,
+                        FIRE_MORT = sum((CURR_TOTAL-PREV_TOTAL)*ifelse(agent_key=="fire",1,0),na.rm=T)*-1,
+                        DISEASE_MORT = sum((CURR_TOTAL-PREV_TOTAL)*ifelse(agent_key=="disease",1,0),na.rm=T)*-1,
+                        INSECT_MORT = sum((CURR_TOTAL-PREV_TOTAL)*ifelse(agent_key=="insect",1,0),na.rm=T)*-1,
+                        ID_MORT = sum((CURR_TOTAL-PREV_TOTAL)*ifelse(agent_key%in%c("insect","disease"),1,0),na.rm=T)*-1),
+            by=c("MAP_UNIT_S","SPCD")) %>%
+  mutate(MORT_TOTAL = ifelse(is.na(MORT_TOTAL),0,MORT_TOTAL),
+         FIRE_MORT = ifelse(is.na(FIRE_MORT),0,FIRE_MORT),
+         INSECT_MORT = ifelse(is.na(INSECT_MORT),0,INSECT_MORT),
+         DISEASE_MORT = ifelse(is.na(DISEASE_MORT),0,DISEASE_MORT),
+         ID_MORT = ifelse(is.na(ID_MORT),0,ID_MORT),
+         CHNG_TPA_TOT = (CURR_TOTAL-PREV_TOTAL)/AREA_TOTAL,
+         CHNG_PERC_tot = (CURR_TOTAL-PREV_TOTAL)/PREV_TOTAL,
+         RECR_est = (CURR_TOTAL-PREV_TOTAL) + MORT_TOTAL,
+         fire.pace = ifelse(FIRE_MORT>RECR_est, "no", "yes"),
+         id.pace = ifelse(ID_MORT > RECR_est, "no", "yes"),
+         other.pace = ifelse(MORT_TOTAL-(FIRE_MORT+ID_MORT) > RECR_est, "no", "yes"),
+         all.pace = ifelse(MORT_TOTAL > RECR_est, "no","yes"),
+         minus.fire = ifelse(MORT_TOTAL-FIRE_MORT > RECR_est, "no", "yes"),
+         minus.id = ifelse(MORT_TOTAL - ID_MORT > RECR_est, "no", "yes")) %>% 
+  left_join(all.fia$PLOT %>% 
+              filter(most.recent=="yes",
+                     !is.na(REMPER)) %>% 
+              select(PLT_CN,ECOSUBCD,MEASYEAR,REMPER) %>% 
+              mutate(REMPER=round(REMPER,0)) %>% 
+              group_by(ECOSUBCD) %>% 
+              summarise(minT1yr = min(MEASYEAR-REMPER),
+                        maxT1yr = max(MEASYEAR-REMPER),
+                        minT2yr = min(MEASYEAR),
+                        maxT2yr = max(MEASYEAR)),
+            by=c("MAP_UNIT_S"="ECOSUBCD"))
+
+# filtering for pila
+mort.decomp.pila <- mort.decomp.sp %>% 
+  filter(SPCD==117,
+         CURR_TOTAL>0 | PREV_TOTAL>0)
+
+# summarising for pila-specific rates
+
+dall.er.pila <- dall.er.sp %>% 
+  mutate(sp.indicator = ifelse(SPCD==117, 1, 0)) %>% 
+  group_by(MAP_UNIT_S) %>%
+  summarise(CURR_BAA.pila = sum(CURR_TOTAL.baa*sp.indicator),
+            PREV_BAA.pila = sum(PREV_TOTAL.baa*sp.indicator),
+            CURR_BAA.all = sum(CURR_TOTAL.baa),
+            PREV_BAA.all = sum(PREV_TOTAL.baa),
+            
+            CURR_TPA.pila = sum(CURR_TOTAL.tpa*sp.indicator),
+            CURR_TPA.pila.var = sum(CURR_TOTAL_VAR.tpa*sp.indicator),
+            
+            PREV_TPA.pila = sum(PREV_TOTAL.tpa*sp.indicator),
+            PREV_TPA.pila.var = sum(PREV_TOTAL_VAR.tpa*sp.indicator),
+            
+            CHNG_TOTAL.tpa.pila = sum(CHNG_TOTAL.tpa*sp.indicator,na.rm=T),
+            CHNG_TOTAL.tpa.pila.var = sum(CHNG_TOTAL_VAR.tpa*sp.indicator,na.rm=T),
+            CHNG_PERC.tpa.pila = sum(CHNG_PERC.tpa*sp.indicator,na.rm=T),
+            CHNG_PERC.tpa.pila.var = sum(CHNG_PERC_VAR.tpa*sp.indicator,na.rm=T),
+            
+            CHNG_TOTAL.baa.pila = sum(CHNG_TOTAL.baa*sp.indicator,na.rm=T),
+            CHNG_TOTAL.baa.pila.var = sum(CHNG_TOTAL_VAR.baa*sp.indicator,na.rm=T),
+            CHNG_PERC.baa.pila = sum(CHNG_PERC.baa*sp.indicator,na.rm=T),
+            CHNG_PERC.baa.pila.var = sum(CHNG_PERC_VAR.baa*sp.indicator,na.rm=T),
+            
+            CURR_TPA.all = sum(CURR_TOTAL.tpa),
+            PREV_TPA.all = sum(PREV_TOTAL.tpa),
+            AREA = mean(AREA_TOTAL))%>% 
+  mutate(CURR_BAA.prop = CURR_BAA.pila/CURR_BAA.all,
+         CURR_TPA.prop = CURR_TPA.pila/CURR_TPA.all,
+         PREV_BAA.prop = PREV_BAA.pila/PREV_BAA.all,
+         PREV_TPA.prop = PREV_TPA.pila/PREV_TPA.all,
+         BAA_CHNG_PERC = (CURR_BAA.pila-PREV_BAA.pila)/PREV_BAA.pila,
+         TPA_CHNG_PERC = (CURR_TPA.pila-PREV_TPA.pila)/PREV_TPA.pila,
+         
+         CHNG_PERC.tpa.pila.sd = sqrt(CHNG_PERC.tpa.pila.var),
+         
+         BAA_CHNG_PERC.nonpila = ((CURR_BAA.all-CURR_BAA.pila)-(PREV_BAA.all-PREV_BAA.pila))/(PREV_BAA.all-PREV_BAA.pila),
+         TPA_CHNG_PERC.nonpila = ((CURR_TPA.all-CURR_TPA.pila)-(PREV_TPA.all-PREV_TPA.pila))/(PREV_TPA.all-PREV_TPA.pila),
+         BAA_CHNG_PERC.all = (CURR_BAA.all-PREV_BAA.all)/PREV_BAA.all,
+         TPA_CHNG_PERC.all = (CURR_TPA.all-PREV_TPA.all)/PREV_TPA.all,
+         quadrant.baa = case_when(BAA_CHNG_PERC < 0 & BAA_CHNG_PERC.nonpila < 0 ~ 1,
+                                  BAA_CHNG_PERC < 0 & BAA_CHNG_PERC.nonpila >= 0 ~ 2,
+                                  BAA_CHNG_PERC >= 0 & BAA_CHNG_PERC.nonpila >= 0 ~ 3,
+                                  BAA_CHNG_PERC >= 0 & BAA_CHNG_PERC.nonpila < 0 ~ 4),
+         quadrant.tpa = case_when(TPA_CHNG_PERC < 0 & TPA_CHNG_PERC.nonpila < 0 ~ 1,
+                                  TPA_CHNG_PERC < 0 & TPA_CHNG_PERC.nonpila >= 0 ~ 2,
+                                  TPA_CHNG_PERC >= 0 & TPA_CHNG_PERC.nonpila >= 0 ~ 3,
+                                  TPA_CHNG_PERC >= 0 & TPA_CHNG_PERC.nonpila < 0 ~ 4)) %>% 
+  filter(PREV_TPA.pila > 0 | CURR_TPA.pila > 0) %>% 
+  left_join(mort.decomp.pila %>% sf::st_drop_geometry())
+
+```
+
+#### Current density {.tabset .tabset-pills}
+
+##### % occupied
+
+```{r}
+mapcolor <- "wheat3"
+linecolor <- "gray40"
+pointcolor <- "firebrick2"
+
+
+ggplot() +
+  geom_sf(data = cont %>% 
+            as(.,"sf"),
+          col=linecolor,
+          fill = mapcolor) + 
+  geom_sf(data = states %>% 
+            as(.,"sf"),
+          fill=NA,
+          col=linecolor) +
+  geom_sf(data=dall.er.pila %>% 
+            filter(!is.na(CURR_TPA.pila)),
+          col=NA,
+          aes(fill = (nPlots_TREE/nPlots_AREA)*100))+
+  geom_sf(data = states %>% 
+            as(.,"sf"),
+          fill=NA,
+          col=linecolor,
+          lty=2) +
+  theme(panel.background = element_rect(fill="skyblue1")) +
+  lims(x = c(-2.75e6, -1.25e6),
+       y = c(1.25e6,3e6)) +
+  scale_fill_steps(name = "Occupied area (%)",
+                   na.value=NA,
+                   low = "white",
+                   high = "forestgreen",
+                   n.breaks = 7)
+
+```
+
+##### TPA
+
+```{r}
+mapcolor <- "wheat3"
+linecolor <- "gray40"
+pointcolor <- "firebrick2"
+
+
+ggplot() +
+  geom_sf(data = cont %>% 
+            as(.,"sf"),
+          col=linecolor,
+          fill = mapcolor) + 
+  geom_sf(data = states %>% 
+            as(.,"sf"),
+          fill=NA,
+          col=linecolor) +
+  geom_sf(data=dall.er.pila %>% 
+            filter(!is.na(CURR_TPA.pila)),
+          col=NA,
+          aes(fill = CURR_TPA.pila/AREA))+
+  geom_sf(data = states %>% 
+            as(.,"sf"),
+          fill=NA,
+          col=linecolor,
+          lty=2) +
+  theme(panel.background = element_rect(fill="skyblue1")) +
+  lims(x = c(-2.75e6, -1.25e6),
+       y = c(1.25e6,3e6)) +
+  scale_fill_steps(name = "Trees per acre",
+                   na.value=NA,
+                   low = "white",
+                   high = "forestgreen",
+                   n.breaks = 9)
+
+```
+
+##### BAA
+
+```{r}
+mapcolor <- "wheat3"
+linecolor <- "gray40"
+pointcolor <- "firebrick2"
+
+
+ggplot() +
+  geom_sf(data = cont %>% 
+            as(.,"sf"),
+          col=linecolor,
+          fill = mapcolor) + 
+  geom_sf(data = states %>% 
+            as(.,"sf"),
+          fill=NA,
+          col=linecolor) +
+  geom_sf(data=dall.er.pila %>% 
+            filter(!is.na(CURR_TPA.pila)),
+          col=NA,
+          aes(fill = CURR_BAA.pila/AREA))+
+  geom_sf(data = states %>% 
+            as(.,"sf"),
+          fill=NA,
+          col=linecolor,
+          lty=2) +
+  theme(panel.background = element_rect(fill="skyblue1")) +
+  lims(x = c(-2.75e6, -1.25e6),
+       y = c(1.25e6,3e6)) +
+  scale_fill_steps(name = "Basal area \nper acre",
+                   na.value=NA,
+                   low = "white",
+                   high = "forestgreen",
+                   n.breaks = 9)
+
+```
+
+#### Abundance change
+
+```{r}
+mapcolor <- "wheat3"
+linecolor <- "gray40"
+pointcolor <- "firebrick2"
+
+
+ggplot() +
+  geom_sf(data = cont %>% 
+            as(.,"sf"),
+          col=linecolor,
+          fill = mapcolor) + 
+  geom_sf(data = states %>% 
+            as(.,"sf"),
+          fill=NA,
+          col=linecolor) +
+  geom_sf(data=dall.er.pila %>% 
+            filter(!is.na(CHNG_PERC.tpa.pila)),
+          col=NA,
+          aes(fill = CHNG_PERC.tpa.pila))+
+  geom_sf(data = states %>% 
+            as(.,"sf"),
+          fill=NA,
+          col=linecolor,
+          lty=2) +
+  theme(panel.background = element_rect(fill="skyblue1")) +
+  lims(x = c(-2.75e6, -1.25e6),
+       y = c(1.25e6,3e6)) +
+  scale_fill_steps2(name = "PILA % change \n(abundance)",
+                    na.value=NA,
+                    low = "firebrick3",
+                    mid="white",
+                    midpoint=0,
+                    high = "darkblue",
+                    limits = c(-100,100),
+                    n.breaks = 9)
+
+```
+
+#### Basal area change
+
+```{r}
+mapcolor <- "wheat3"
+linecolor <- "gray40"
+pointcolor <- "firebrick2"
+
+
+ggplot() +
+  geom_sf(data = cont %>% 
+            as(.,"sf"),
+          col=linecolor,
+          fill = mapcolor) + 
+  geom_sf(data = states %>% 
+            as(.,"sf"),
+          fill=NA,
+          col=linecolor) +
+  geom_sf(data=dall.er.pila %>% 
+            filter(!is.na(CHNG_PERC.tpa.pila)),
+          col=NA,
+          aes(fill = CHNG_PERC.baa.pila))+
+  geom_sf(data = states %>% 
+            as(.,"sf"),
+          fill=NA,
+          col=linecolor,
+          lty=2) +
+  theme(panel.background = element_rect(fill="skyblue1")) +
+  lims(x = c(-2.75e6, -1.25e6),
+       y = c(1.25e6,3e6)) +
+  scale_fill_steps2(name = "PILA % change \n(basal area)",
+                    na.value=NA,
+                    low = "firebrick3",
+                    mid="white",
+                    midpoint=0,
+                    high = "darkblue",
+                    limits = c(-100,100),
+                    n.breaks = 9)
+
+```
+
+### Mortality {.tabset}
+
+#### --
+
+#### Ecoregion subsections
+
+```{r}
+mapcolor <- "wheat3"
+linecolor <- "gray40"
+pointcolor <- "firebrick2"
+
+
+ggplot() +
+  geom_sf(data = cont %>% 
+            as(.,"sf"),
+          col=linecolor,
+          fill = mapcolor) + 
+  geom_sf(data = states %>% 
+            as(.,"sf"),
+          fill=NA,
+          col=linecolor) +
+  geom_sf(data=dall.er.pila %>% 
+            filter(!is.na(CHNG_PERC.tpa.pila)),
+          col=NA,
+          aes(fill = (MORT_TOTAL/PREV_TOTAL)*100))+
+  geom_sf(data = states %>% 
+            as(.,"sf"),
+          fill=NA,
+          col=linecolor,
+          lty=2) +
+  theme(panel.background = element_rect(fill="skyblue1")) +
+  lims(x = c(-2.75e6, -1.25e6),
+       y = c(1.25e6,3e6)) +
+  scale_fill_steps(name = "PILA % mortality",
+                   na.value=NA,
+                   low = "white",
+                   #midpoint=50,
+                   high = "firebrick3",
+                   limits = c(0,100),
+                   n.breaks = 7)
+
+```
+
+#### Agents
+
+```{r}
+
+# total agent-specific mortality for all species
+agents <- all.fia %>% 
+  growMort_dlp(db = .,
+               stateVar = "TPA",
+               treeDomain = SPCD==117,
+               totals = TRUE,
+               grpBy = c(agent_key),
+               returnSpatial = F, 
+               nCores = 4,
+               variance = T,
+               sizeThresh = 5,
+               evals = evals,
+               method="TI") %>% 
+  filter(agent_key!="unknown2") %>% 
+  mutate(PREV_TOTAL_SD = sqrt(PREV_TOTAL_VAR)) %>% 
+  mutate(agent_key = ifelse(agent_key=="unknown1","unknown",agent_key))
+
+agents %>% 
+  filter(YEAR==2019) %>% 
+  ggplot(.,
+         aes(x = reorder(agent_key,-PREV_TOTAL),
+             y = PREV_TOTAL/1e6)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = (PREV_TOTAL-(1.96*PREV_TOTAL_SD))/1e6,
+                    ymax = (PREV_TOTAL+(1.96*PREV_TOTAL_SD))/1e6),
+                width=0.4)+
+  labs(x = "Mortality agent",
+       y = "Millions of trees killed") +
+  theme(axis.text.x = element_text(angle=45,hjust=1, size=15)) +
+  scale_y_continuous(labels = scales::comma) +
+  theme(legend.position="none")
+
+
+```
+
+#### Agents x Size
+
+```{r}
+
+all.fia$TREE$newSize <- makeClasses(all.fia$TREE$DIA, 
+                                    interval = 15, 
+                                    numLabs=FALSE, 
+                                    lower = 5, 
+                                    upper = 150)
+
+agents <- all.fia %>% 
+  growMort_dlp(db = .,
+               stateVar = "TPA",
+               treeDomain = SPCD==117,
+               totals = TRUE,
+               grpBy = c(agent_key,newSize),
+               returnSpatial = F, 
+               nCores = 4,
+               variance = T,
+               sizeThresh = 5,
+               evals = evals,
+               method="TI") %>% 
+  filter(agent_key!="unknown2") %>% 
+  mutate(PREV_TOTAL_SD = sqrt(PREV_TOTAL_VAR)) %>% 
+  mutate(agent_key = ifelse(agent_key=="unknown1","unknown",agent_key))
+
+
+agents %>% 
+  mutate(newSize = ifelse(newSize == "[5,20)","[05,20)",newSize)) %>% 
+  filter(YEAR==2019) %>% 
+  ggplot(.,
+         aes(x = newSize,
+             y = PREV_TOTAL,
+             fill = agent_key)) +
+  geom_bar(position = "fill",
+           stat = "identity") +
+  scale_fill_jama(name = "Mortality agent") +
+  labs(x = "DBH size class",
+       y = "Proportion") +
+  theme(axis.text.x = element_text(angle=45,hjust=1))
+
+
+
+```
+
+### Regeneration {.tabset}
+
+#### code
+
+```{r}
+
+seed <- all.fia %>% 
+  seedling(.,
+           polys = er4.pila %>% 
+             sf::st_as_sf() %>% 
+             select(MAP_UNIT_S),
+           treeDomain = SPCD==117,
+           bySpecies = F,
+           totals = T,
+           returnSpatial = T) %>% 
+  filter(YEAR%in%c(2009,2010,2019))
+
+sapling <- all.fia %>% 
+  growMort_dlp(db = .,
+               stateVar = "TPA",
+               polys = er4.pila %>%
+                 sf::st_as_sf() %>%
+                 select(MAP_UNIT_S),
+               treeDomain = c(DIA<5),
+               grpBy=SPCD,
+               totals = TRUE,
+               nCores = 4,
+               variance = F,
+               sizeThresh=1,
+               evals = evals,
+               method="TI") %>%
+  filter(SPCD==117) %>% 
+  group_by(MAP_UNIT_S) %>% 
+  filter(YEAR==2019)  
+
+dall.er.pila <- dall.er.pila %>% 
+  left_join(., seed %>% 
+              sf::st_drop_geometry() %>%
+              select(YEAR, MAP_UNIT_S,
+                     SEED_TPA = TPA,
+                     SEED_TOTAL = TREE_TOTAL,
+                     SEED_SE = TREE_TOTAL_SE) %>% 
+              pivot_wider(.,
+                          names_from=YEAR,
+                          values_from=c(SEED_TPA,SEED_TOTAL,SEED_SE)),
+            by="MAP_UNIT_S") %>% 
+  left_join(., sapling %>% 
+              select(MAP_UNIT_S,
+                     #SAP_TPA = CURR_TPA,
+                     SAP_TOTAL = CURR_TOTAL,
+                     SAP_SE = CURR_TOTAL_SE)) %>% 
+  mutate(SAP_TOTAL=ifelse(is.na(SAP_TOTAL),0,SAP_TOTAL))
+```
+
+#### Regeneration vs mortality {.tabset .tabset-pills}
+
+##### Seedlings x mort
+
+```{r}
+
+dall.er.pila %>% 
+  ggplot(.,
+         aes(x = (MORT_TOTAL/PREV_TOTAL)*100,
+             y = SEED_TOTAL_2019/AREA_TOTAL)) +
+  geom_point(#size=5,
+    pch=19,
+    alpha=0.5,
+    aes(size=PREV_TOTAL/AREA_TOTAL))+
+  xlab("Adult mortality (%)") +
+  ylab("Seedling density (per acre)") +
+  scale_size(name = "2000-2009 adult density",
+             range=c(1,15))
+
+```
+
+##### Saplings x mort
+
+```{r}
+
+dall.er.pila %>% 
+  ggplot(.,
+         aes(x = (MORT_TOTAL/PREV_TOTAL)*100,
+             y = SAP_TOTAL/AREA_TOTAL)) +
+  geom_point(#size=5,
+    pch=19,
+    alpha=0.5,
+    aes(size=PREV_TOTAL/AREA_TOTAL))+
+  xlab("Adult mortality (%)") +
+  ylab("Sapling density (per acre)") +
+  scale_size(name = "2000-2009 adult density",
+             range=c(1,15))
+
+```
+
+##### Seed x Sap
+
+```{r}
+
+dall.er.pila %>% 
+  ggplot(.,
+         aes(x = SEED_TOTAL_2019/AREA_TOTAL,
+             y = SAP_TOTAL/AREA_TOTAL)) +
+  geom_point(#size=5,
+    pch=21,
+    alpha=0.8,
+    aes(size=PREV_TOTAL/AREA_TOTAL,
+        bg = CHNG_PERC.tpa.pila))+
+  xlab("Seedling density (per acre)") +
+  ylab("Sapling density (per acre)") +
+  scale_size(name = "2000-2009 adult density",
+             range=c(1,15))+
+  scale_fill_steps2(name = "PILA % change \n(abundance)",
+                    aesthetics = "bg",
+                    na.value=NA,
+                    low = "firebrick3",
+                    mid="white",
+                    midpoint=0,
+                    high = "darkblue",
+                    limits = c(-100,100),
+                    n.breaks = 9)
+
+```
+
+Here I was interested in seeing whether those areas with higher seedling density but 0 saplings had suffered larger population declines... indicating a demographic bottleneck at the seed\>sap transition... maybe??
+
+## Exploring sampling designs
+
+### Basic niche-based design
+
+Our Ecography paper found that the niche is most efficiently sampled using a gridded design, and that \~20 sampling points should get us \~75% coverage. So let's use that as a starting point.
+
+Our simulation was based on a single randomly-selected sample point in each grid cell -- so, we would want 20 grid cells arranged over PILA's climate niche. We could also do this differently, of course -- we could have 2 points from 10 cells, 4 points from 5 cells, etc. But let's start with the simple 20 cell case.
+
+#### Niche modeling
+
+Bunch of choices here as well, of course. Ideally, we would get *as much* information as we might think is relevant into the construction of the niche space, so that we need to do as little post-hoc adjusting as possible. Eventually, this may include things like population trajectory categories, drought classes, insect/disease status, etc. But to start, let's make a basic climate-based niche space to play with.
+
+Below are the climate variables (from ClimateNA) we have to play with. Each one is available averaged across a "base" period (1900-1950), as well as a "remper" period (reflecting the years between plot remeasurement) and a "recent" period (2010-2021). **note** -- the variables actually used reflect 1980-2010, which is the period during which most plots were established!
+
+Another important point to consider is that we may want our sampling to be distributed across a gradient of recent climate anomalies, i.e., make sure that we sample from areas that are warming fast and warming slow, or severe recent drought to minimal recent drought. Incorporating that information into the sampling design means calculating recent climate anomalies for all background grid cells (and plots), and including those variables in the ordination. **(added 2/6 -- will work on this after getting basic code and framework up)**
+
+-   \*MAT (Mean annual temp)
+-   MWMT (Mean warmest month temp)
+-   MCMT (Mean coldest month temp)
+-   TD (MWMT - MCMT, i.e., temp range)
+-   \*MAP (mean annual precip)
+-   MSP (Mean spring precip?)
+-   AHM (annual heat-moisture index (MAT+10)/(MAP/1000))
+-   \*SHM (summer heat-moisture index)
+-   DD_0 (freezing degree days)
+-   DD5 (growing degree days, i.e., \>5)
+-   DD18 (degree days \>18)
+-   DD_18 (degree days \<18)
+-   NFFD (number frost free days)
+-   bFFP (julian day FFP begins)
+-   eFFP (julian day FFP ends)
+-   FFP (frost-free period)
+-   \*PAS (snow precip mm, from prev august - curr july)
+-   EMT (30-year extreme min temp)
+-   EXT (30-year extreme max temp)
+-   MAR (mean annual solar radiation)
+-   Eref (Hargreaves reference evap)
+-   \*CMD (Hargreaves climatic moisture deficit)
+-   RH (mean annual relative humidity)
+-   \*CMI (Hoggs climate moisture index)
+-   \*DD1040 (degree days \>10 & \<40)
+
+An a priori list of important variables might include *MAT, MAP, SHM, PAS, CMD, CMI, and DD1040*.
+
+But let's work with those for the time being. If we stay in a 2d PCA-based niche space (which is easy), it looks like this:
+
+####  {.tabset}
+
+##### --
+
+##### ordination code
+
+```{r}
+
+library(ade4)
+
+# First, need to compile and clip ClimateNA rasters for the region to set the background climate space
+
+box <- raster::extent(range)
+
+climna <- raster::stack("climNA_rasters/MAT.tif",
+                        "climNA_rasters/MAP.tif",
+                        "climNA_rasters/SHM.tif",
+                        "climNA_rasters/PAS.tif",
+                        "climNA_rasters/CMD.tif",
+                        "climNA_rasters/CMI.tif",
+                        "climNA_rasters/DD1040.tif",
+                        "climNA_rasters/TD.tif") %>% 
+  projectRaster(.,crs = CRS(base.proj)) %>% 
+  raster::crop(., box)
+
+pila.plts <- all.fia$PLOT %>% 
+  filter(pila.pres==1,
+         most.recent=="yes",
+         !is.na(MAT_remper))
+
+pila.plts <- pila.plts %>% 
+  bind_cols(pila.plts %>% 
+              select(LON = LON_EXACT,
+                     LAT = LAT_EXACT) %>% 
+              SpatialPoints(.,
+                            proj4string = CRS(old.proj)) %>% 
+              spTransform(., CRSobj = CRS(base.proj)) %>% 
+              raster::extract(x = climna,
+                              y = .) %>% 
+              as.data.frame() %>% 
+              rename_all(paste0, "_19802010")) %>% 
+  filter(!is.na(DD1040_19802010))
+
+collab.plts <- collabs %>% 
+  bind_cols(collabs %>% 
+              select(LON,LAT) %>% 
+              SpatialPoints(.,
+                            proj4string = CRS(old.proj)) %>% 
+              spTransform(., CRSobj = CRS(base.proj)) %>% 
+              raster::extract(x = climna,
+                              y = .) %>% 
+              as.data.frame() %>% 
+              rename_all(paste0,"_19802010")) %>% 
+  filter(!is.na(DD1040_19802010))
+
+site.plts <- all.sites %>% 
+  bind_cols(all.sites %>% 
+              select(LON,LAT) %>% 
+              SpatialPoints(.,
+                            proj4string = CRS(old.proj)) %>% 
+              spTransform(., CRSobj = CRS(base.proj)) %>% 
+              raster::extract(x = climna,
+                              y = .) %>% 
+              as.data.frame() %>% 
+              rename_all(paste0,"_19802010")) %>% 
+  filter(!is.na(DD1040_19802010))
+
+done.plts <- done.sites %>% 
+  bind_cols(done.sites %>% 
+              select(LON,LAT) %>% 
+              SpatialPoints(.,
+                            proj4string = CRS(old.proj)) %>% 
+              spTransform(., CRSobj = CRS(base.proj)) %>% 
+              raster::extract(x = climna,
+                              y = .) %>% 
+              as.data.frame() %>% 
+              rename_all(paste0,"_19802010")) %>% 
+  filter(!is.na(DD1040_19802010))
+
+# Here's a step to further clip the climate data to a 30-km buffer around the Little range map
+
+climna <- raster::mask(climna,
+                       mask = raster::buffer(x=range,width=30000))
+
+# converting to points for PCA
+climna.pnts <- rasterToPoints(climna) %>% 
+  as.data.frame() %>% 
+  na.omit()
+
+cells <- cellFromXY(climna$MAT, climna.pnts[,c("x","y")])
+
+
+climate.vars <- c("MAT_19802010",
+                  "MAP_19802010",
+                  "SHM_19802010",
+                  "PAS_19802010",
+                  "CMD_19802010",
+                  "CMI_19802010",
+                  "DD1040_19802010",
+                  "TD_19802010")
+# climate.vars <- c("MAT_remper",
+#                   "MAP_remper",
+#                   "SHM_remper",
+#                   "PAS_remper",
+#                   "CMD_remper",
+#                   "CMI_remper",
+#                   "DD1040_remper")
+
+
+dat <- pila.plts %>% 
+  select(all_of(climate.vars)) %>% 
+  bind_rows(collab.plts %>%
+              select(all_of(climate.vars))) %>% 
+  bind_rows(site.plts %>% 
+              select(all_of(climate.vars))) %>% 
+  bind_rows(done.plts %>% 
+              select(all_of(climate.vars))) %>% 
+  rename(MAT = MAT_19802010,
+         MAP = MAP_19802010,
+         SHM = SHM_19802010,
+         PAS = PAS_19802010,
+         CMD = CMD_19802010,
+         CMI = CMI_19802010,
+         DD1040 = DD1040_19802010,
+         TD = TD_19802010) %>% 
+  bind_rows(climna.pnts %>% select(-x,-y)) %>%
+  na.omit() %>% sf::st_drop_geometry()
+
+clim.space <- dudi.pca(df = dat,
+                       row.w = c(rep(0,nrow(dat)-nrow(climna.pnts)),
+                                 rep(1,nrow(climna.pnts))),
+                       scale = T,
+                       center = T,
+                       scannf = F,
+                       nf = 2)
+
+pila.plts <- pila.plts %>% 
+  bind_cols(clim.space$li[1:nrow(pila.plts),])
+
+collab.plts <- collab.plts %>% 
+  bind_cols(clim.space$li[(nrow(pila.plts)+1):(nrow(pila.plts)+nrow(collab.plts)),])
+
+site.plts <- site.plts %>% 
+  bind_cols(clim.space$li[(nrow(pila.plts)+nrow(collab.plts)+1):(nrow(pila.plts)+nrow(collab.plts)+nrow(site.plts)),])
+
+done.plts <- done.plts %>% 
+  bind_cols(clim.space$li[(nrow(pila.plts)+nrow(collab.plts)+nrow(site.plts)+1):(nrow(pila.plts)+nrow(collab.plts)+nrow(site.plts)+nrow(done.plts)),])
+
+climna.pnts <- climna.pnts %>% 
+  bind_cols(clim.space$li[(nrow(pila.plts)+nrow(collab.plts)+nrow(site.plts)+nrow(done.plts)+1):nrow(dat),]) %>% 
+  mutate(rasterCell = cells)
+
+## adding some useful summary information that I'll have in the leaflet pop-ups
+
+pila.plts <- pila.plts %>% 
+  left_join(.,
+            all.fia$TREE %>% 
+              filter(SPCD==117,
+                     most.recent=="yes") %>% 
+              group_by(PLT_CN) %>% 
+              summarize(total_PILA = n(),
+                        live_PILA = sum(ifelse(STATUSCD==1,1,0)),
+                        dead_PILA = sum(ifelse(STATUSCD==2,1,0)),
+                        mean_PILA_size = mean(DIA,na.rm=T)),
+            by="PLT_CN")
+
+```
+
+##### loadings
+
+```{r}
+ade4::s.corcircle(clim.space$co/100,grid = F)
+
+```
+
+**Axis 1** largely pulls apart temperature-related variation -- MAT, SHM, DD1040 -- though CMD also loads heavily. Separates cold & wet on left from hot & dry on right, capturing 68.15% of total variation.
+
+**Axis 2** is more precip-related, with MAP dominant, followed by MAT and CMI. Separates warm/wet from cold/dry.
+
+*basic interpretation of space should be clockwise from lower left: wet, cold, dry, hot*
+
+##### niche figure
+
+```{r}
+
+ggplot() +
+  geom_point(data = clim.space$li,
+             aes(x = Axis1,
+                 y = Axis2,
+                 col = "Geographic background"),
+             pch = 19,
+             size = 1,
+             alpha= 0.08) +
+  geom_point(data = pila.plts,
+             aes(x = Axis1,
+                 y = Axis2,
+                 col = "PILA FIA plots"),
+             pch = 19,
+             size = 2,
+             alpha = 0.7) +
+  geom_point(data = collab.plts,
+             aes(x = Axis1,
+                 y = Axis2,
+                 col = "Collab data"),
+             pch=19,
+             size=4,
+             alpha=0.8)+
+  geom_text(aes(x = c(-7,-7,5,5), 
+                y = c(-4,2.5,2.5,-4),
+                label = c("WET","COLD","DRY","HOT")),
+            size=8)+
+  scale_color_manual(name = "",
+                     values = c("Geographic background" = "black",
+                                "PILA FIA plots" = "firebrick2",
+                                "Collab data" = "dodgerblue2"))
+
+
+```
+
+**notes:** The "geographic background" points here represent 800m resolution grid cells across a rectangle bounding the geographic distribution of PILA. There is undoubtedly alot of space that isn't relevant to the species.
+
+##### geographic context {.tabset .tabset-pills}
+
+This figure shows the extent of the climate background used in the ordination (MAT as example). It definitely includes lots of area that's unoccupied (especially on the hot/dry end), which can skew the climate space in ways that aren't relevant to the species in question. That said, it still does seem pretty tight geographically -- might be fine, but could play with other ways of doing it (e.g., buffer out from all known occurrences by 100 miles or so, the use that to crop climate data).
+
+###### extent
+
+```{r}
+
+plot(range)
+plot(climna$MAT/10,add=T, legend=F)
+plot(states,add=T)
+plot(cont,add=T)
+plot(range,col=rgb(0,0,0,0.2),add=T)
+plot(box,add=T)
+
+```
+
+###### axis 1
+
+```{r}
+
+t <- climna$MAT
+t[] <- NA
+t[cells] <- clim.space$li$Axis1[(nrow(pila.plts)+1):nrow(dat)]
+
+plot(t)
+plot(states,add=T)
+plot(cont,add=T)
+plot(range, col=rgb(0,0,0,0.1),add=T)
+
+
+```
+
+###### axis 2
+
+```{r}
+
+t <- climna$MAT
+t[] <- NA
+t[cells] <- clim.space$li$Axis2[(nrow(pila.plts)+1):nrow(dat)]
+
+plot(t)
+plot(states,add=T)
+plot(cont,add=T)
+plot(range, col=rgb(0,0,0,0.1),add=T)
+
+
+```
+
+#### Example gridded design {.tabset}
+
+##### code
+
+Here for a 5x5 gridded sample... goal would be to get \~20 total samples, but we should also think about replication within climate bins...
+
+```{r}
+
+niche <- mcp(xy = pila.plts %>%
+               select(Axis1,Axis2) %>% 
+               SpatialPoints(.), 
+             percent=100)
+
+grid <- makegrid(niche,n = 20,pretty=F)
+
+samp <- spsample(niche, n=20, type="regular")
+
+r <- raster(extent(niche),nrows=5,ncols=5) %>% 
+  rasterToPolygons() %>%
+  sf::st_as_sf()
+
+r <- r %>% 
+  mutate(climZone = c("A1", "B1", "C1", "D1", "E1",
+                      "A2", "B2", "C2", "D2", "E2",
+                      "A3", "B3", "C3", "D3", "E3",
+                      "A4", "B4", "C4", "D4", "E4",
+                      "A5", "B5", "C5", "D5", "E5"),
+         climZone2 = c(1:25))
+
+## transferring climate zones to climate data and fia plots
+
+climna.pnts <- climna.pnts %>% 
+  mutate(coord1 = Axis1, coord2 = Axis2) %>% 
+  sf::st_as_sf(coords = c("coord1","coord2")) %>% 
+  sf::st_join(r %>% select(climZone, climZone2))
+
+pila.plts <- pila.plts %>% 
+  mutate(coord1 = Axis1, coord2 = Axis2) %>% 
+  sf::st_as_sf(coords = c("coord1","coord2")) %>% 
+  sf::st_join(r %>% select(climZone, climZone2))
+
+t <- climna$MAT
+names(t) <- "climZone2"
+t[cells] <- climna.pnts$climZone2
+
+rtp <- rasterToPolygons(t,dissolve = T) %>% 
+  sf::st_as_sf(crs=CRS(base.proj)) %>% 
+  left_join(r %>% 
+              select(climZone,climZone2) %>% 
+              sf::st_drop_geometry(),
+            by=c("climZone2"))
+```
+
+##### niche
+
+```{r}
+
+ggplot() +
+  geom_point(data = clim.space$li,
+             aes(x = Axis1,
+                 y = Axis2,
+                 col = "Background"),
+             pch = 19,
+             size = 1,
+             alpha= 0.2) +
+  geom_point(data = pila.plts,
+             aes(x = Axis1,
+                 y = Axis2,
+                 col = "PILA FIA plots"),
+             pch = 19,
+             size = 1,
+             alpha = 0.6) +
+  geom_point(data = collab.plts,
+             aes(x = Axis1,
+                 y = Axis2,
+                 bg = "Collab data"),
+             pch=21,
+             size=4,
+             alpha=0.8)+
+  geom_point(data = site.plts,
+             aes(x = Axis1,
+                 y = Axis2,
+                 bg = "Remaining sites"),
+             pch=24,
+             size=5,
+             alpha=0.8)+
+  geom_point(data = done.plts,
+             aes(x = Axis1,
+                 y = Axis2,
+                 bg = "Completed sites"),
+             pch = 24,
+             size = 5,
+             alpha = 0.8) + 
+  geom_text(aes(x = c(-6,-6,4,4), 
+                y = c(-5,2.5,2.5,-5),
+                label = c("WET","COLD","DRY","HOT"))) +
+  geom_sf(data = r,
+          fill = NA,
+          aes(col = "sampling grid"),
+          lwd=3) +
+  geom_sf_label(data = r,
+                aes(label = climZone),
+                alpha=0.6)+
+  scale_color_manual(name = "",
+                     values = c("Background" = "gray",
+                                "PILA FIA plots" = "black",
+                                "Collab data" = "firebrick3",
+                                "Remaining sites" = "dodgerblue3",
+                                "Completed sites" = "firebrick2",
+                                "sampling grid" = "blue"),
+                     aesthetics = c("col","bg")) +
+  theme(legend.position = "right",
+        plot.background = element_rect(fill="transparent")) +
+  guides(color = guide_legend(override.aes = list(pch = c(1,21,24,19,24,NA))))
+
+ggsave('nichedesign2.png', p, bg="white")
+```
+
+##### all zones
+
+```{r, fig.height=7}
+
+ggplot() +
+  geom_sf(data = cont %>% 
+            sf::st_as_sf(),
+          fill="white",
+          col=linecolor) +
+  geom_sf(data = states %>% 
+            sf::st_as_sf(),
+          fill="white",
+          col=linecolor) +
+  geom_sf(data = rtp,
+          aes(fill = climZone),
+          inherit.aes=F,
+          col=NA,
+          alpha=0.9) +
+  theme(panel.background = element_rect(fill="skyblue1")) +
+  lims(x = c(-2.75e6, -1.25e6),
+       y = c(1.25e6,2.75e6))
+
+```
+
+#### CLIMATE ZONE MAPS {.tabset}
+
+##### Instructions
+
+**Important: These are exact FIA plot coordinates! Do not share!**
+
+The idea behind these interactive maps is to help guide sample site selection, as well as efforts to gather existing data resources. The "axis 1" and "axis 2" maps can give a sense of the general climatic gradients involved. The "all zones" map can be used to identify and map specific climate sampling zones. On all maps, FIA plots that contained PILA in the most recent survey can be displayed. The icon color corresponds roughly with the number of live PILA on the plot (white = few, green = lots), and any plot can be clicked to bring up the plot identifier, year surveyed, number of live and dead PILA, and other useful info. Basemap can be changed -- "Lite" option is useful for finding rare climate zones, and "Topo" is useful for checking out potential site access. Slider controls climate zone opacity.
+
+##### Axis 1 groups
+
+```{r out.width = '100%'}
+opacity <- 1
+
+pal <- colorNumeric(
+  palette = colorRampPalette(c('white', 'green'))(length(pila.plts$live_PILA)), 
+  domain = pila.plts$live_PILA)
+
+icons <- awesomeIcons(icon = "egg",
+                      iconColor = pal(pila.plts$live_PILA),
+                      library = "ion",
+                      markerColor = "black",
+                      squareMarker = F)
+
+
+leaflet() %>% 
+  # basemap groups
+  addTiles(group = "OSM (default)") %>% 
+  addProviderTiles(providers$Stamen.TonerLite, group = "Lite") %>% 
+  addProviderTiles(providers$Esri.WorldTopoMap, group = "Topo") %>% 
+  # polygon groups
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("A1","A2","A3","A4","A5")),
+              fillColor = "red",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "Zones A1-A5") %>% 
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("B1","B2","B3","B4","B5")),
+              fillColor = "yellow",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "Zones B1-B5") %>% 
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("C1","C2","C3","C4","C5")),
+              fillColor = "lightblue",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "Zones C1-C5") %>% 
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("D1","D2","D3","D4","D5")),
+              fillColor = "blue",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "Zones D1-D5") %>% 
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("E1","E2","E3","E4","E5")),
+              fillColor = "purple",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "Zones E1-E5") %>% 
+  addPolygons(data = usfs,
+              fill = F,
+              #fillColor = "white",
+              #fillOpacity = 0,
+              stroke = TRUE,
+              color = "forestgreen",
+              weight = 3,
+              popup = ~ADMIN_UNIT,
+              group = "USFS boundaries") %>% 
+  addAwesomeMarkers(data = pila.plts,
+                    #opacity = 1,
+                    lng = ~LON, 
+                    lat=~LAT, 
+                    group = "FIA plots", 
+                    popup= ~paste("Plot CN: ", PLT_CN,
+                                  "<br>Year: ", MEASYEAR,
+                                  "<br>Live PILA: ", live_PILA,
+                                  "<br>Dead PILA: ", dead_PILA,
+                                  "<br>Mean DIA: ", mean_PILA_size,
+                                  "<br>Lat: ", LAT,
+                                  "<br>Long: ", LON,
+                                  "<br>Elev: ", ELEV),
+                    icon = icons
+                    #color = ~pal(live_PILA),
+                    #radius = 8
+  ) %>% 
+  #Legend
+  addLegend(position = "bottomright",
+            colors = c("red","yellow","lightblue","blue","purple"),
+            labels = c("A1-A5","B1-B5","C1-C5","D1-D5","E1-E5")) %>% 
+  
+  # layers control
+  addLayersControl(
+    baseGroups = c("OSM (default)", "Lite", "Topo"),
+    overlayGroups = c("FIA plots",
+                      "Zones A1-A5", "Zones B1-B5",
+                      "Zones C1-C5", "Zones D1-D5",
+                      "Zones E1-E5",
+                      "USFS boundaries"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>% 
+  hideGroup(c("FIA plots","USFS boundaries")) %>% 
+  
+  #OPACITY SLIDER
+  addControl(html = "<input id=\"OpacitySlide\" type=\"range\" min=\"0\" max=\"1\" step=\"0.1\" value=\"0.5\">", position="topright") %>%   # Add Slider
+  htmlwidgets::onRender(
+    "function(el,x,data){
+                     var map = this;
+                     var evthandler = function(e){
+                        var layers = map.layerManager.getVisibleGroups();
+                        console.log('VisibleGroups: ', layers); 
+                        console.log('Target value: ', +e.target.value);
+                        layers.forEach(function(group) {
+                          var layer = map.layerManager._byGroup[group];
+                          console.log('currently processing: ', group);
+                          Object.keys(layer).forEach(function(el){
+                            if(layer[el] instanceof L.Polygon){;
+                            console.log('Change opacity of: ', group, el);
+                             layer[el].setStyle({fillOpacity:+e.target.value});
+                            }
+                          });
+                          
+                        })
+                     };
+              $('#OpacitySlide').mousedown(function () { map.dragging.disable(); });
+              $('#OpacitySlide').mouseup(function () { map.dragging.enable(); });
+              $('#OpacitySlide').on('input', evthandler)}
+          ")
+
+
+
+```
+
+##### Axis 2 groups
+
+```{r out.width = '100%'}
+opacity <- 1
+
+
+pal <- colorNumeric(
+  palette = colorRampPalette(c('white', 'green'))(length(pila.plts$live_PILA)), 
+  domain = pila.plts$live_PILA)
+
+icons <- awesomeIcons(icon = "egg",
+                      iconColor = pal(pila.plts$live_PILA),
+                      library = "ion",
+                      markerColor = "black",
+                      squareMarker = F)
+
+
+leaflet() %>% 
+  # basemap groups
+  addTiles(group = "OSM (default)") %>% 
+  addProviderTiles(providers$Stamen.TonerLite, group = "Lite") %>% 
+  addProviderTiles(providers$Esri.WorldTopoMap, group = "Topo") %>% 
+  # polygon groups
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("A1","B1","C1","D1","E1")),
+              fillColor = "red",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "Zones A1-E1") %>% 
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("A2","B2","C2","D2","E2")),
+              fillColor = "yellow",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "Zones A2-E2") %>% 
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("A3","B3","C3","D3","E3")),
+              fillColor = "lightblue",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "Zones A3-E3") %>% 
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("A4","B4","C4","D4","E4")),
+              fillColor = "blue",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "Zones A4-E4") %>% 
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("A5","B5","C5","D5","E5")),
+              fillColor = "purple",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "Zones A5-E5") %>%
+  addPolygons(data = usfs,
+              fill = F,
+              #fillColor = "white",
+              #fillOpacity = 0,
+              stroke = TRUE,
+              color = "forestgreen",
+              weight = 3,
+              popup = ~ADMIN_UNIT,
+              group = "USFS boundaries") %>% 
+  addAwesomeMarkers(data = pila.plts,
+                    #opacity = 1,
+                    lng = ~LON, 
+                    lat=~LAT, 
+                    group = "FIA plots", 
+                    popup= ~paste("Plot CN: ", PLT_CN,
+                                  "<br>Year: ", MEASYEAR,
+                                  "<br>Live PILA: ", live_PILA,
+                                  "<br>Dead PILA: ", dead_PILA,
+                                  "<br>Mean DIA: ", mean_PILA_size,
+                                  "<br>Lat: ", LAT,
+                                  "<br>Long: ", LON,
+                                  "<br>Elev: ", ELEV),
+                    icon = icons
+                    #color = ~pal(live_PILA),
+                    #radius = 8
+  ) %>% 
+  #Legend
+  addLegend(position = "bottomright",
+            colors = c("red","yellow","lightblue","blue","purple"),
+            labels = c("A1-E1","A2-E2","A3-E3","A4-E4","A5-E5")) %>% 
+  # layers control
+  addLayersControl(
+    baseGroups = c("OSM (default)", "Lite", "Topo"),
+    overlayGroups = c("FIA plots",
+                      "Zones A1-E1", "Zones A2-E2",
+                      "Zones A3-E3", "Zones A4-E4",
+                      "Zones A5-E5",
+                      "USFS boundaries"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>% 
+  hideGroup(c("FIA plots","USFS boundaries")) %>% 
+  
+  
+  #OPACITY SLIDER
+  addControl(html = "<input id=\"OpacitySlide\" type=\"range\" min=\"0\" max=\"1\" step=\"0.1\" value=\"0.5\">", position="topright") %>%   # Add Slider
+  htmlwidgets::onRender(
+    "function(el,x,data){
+                     var map = this;
+                     var evthandler = function(e){
+                        var layers = map.layerManager.getVisibleGroups();
+                        console.log('VisibleGroups: ', layers); 
+                        console.log('Target value: ', +e.target.value);
+                        layers.forEach(function(group) {
+                          var layer = map.layerManager._byGroup[group];
+                          console.log('currently processing: ', group);
+                          Object.keys(layer).forEach(function(el){
+                            if(layer[el] instanceof L.Polygon){;
+                            console.log('Change opacity of: ', group, el);
+                             layer[el].setStyle({fillOpacity:+e.target.value});
+                            }
+                          });
+                          
+                        })
+                     };
+              $('#OpacitySlide').mousedown(function () { map.dragging.disable(); });
+              $('#OpacitySlide').mouseup(function () { map.dragging.enable(); });
+              $('#OpacitySlide').on('input', evthandler)}
+          ")
+
+
+
+
+```
+
+##### All zones
+
+```{r out.width = '100%'}
+opacity <- 1
+
+
+pal <- colorNumeric(
+  palette = colorRampPalette(c('white', 'green'))(length(pila.plts$live_PILA)), 
+  domain = pila.plts$live_PILA)
+
+icons <- awesomeIcons(icon = "egg",
+                      iconColor = pal(pila.plts$live_PILA),
+                      library = "ion",
+                      markerColor = "black",
+                      squareMarker = F)
+
+
+leaflet() %>% 
+  # basemap groups
+  addTiles(group = "OSM (default)") %>% 
+  addProviderTiles(providers$Stamen.TonerLite, group = "Lite") %>% 
+  addProviderTiles(providers$Esri.WorldTopoMap, group = "Topo") %>% 
+  # polygon groups
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("A1")),
+              fillColor = "red",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "A1") %>% 
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("A2")),
+              fillColor = "red",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "A2") %>% 
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("A3")),
+              fillColor = "red",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "A3") %>% 
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("A4")),
+              fillColor = "red",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "A4") %>% 
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("A5")),
+              fillColor = "red",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "A5") %>% 
+  
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("B1")),
+              fillColor = "red",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "B1") %>% 
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("B2")),
+              fillColor = "red",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "B2") %>% 
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("B3")),
+              fillColor = "red",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "B3") %>% 
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("B4")),
+              fillColor = "red",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "B4") %>% 
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("B5")),
+              fillColor = "red",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "B5") %>% 
+  
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("C1")),
+              fillColor = "red",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "C1") %>% 
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("C2")),
+              fillColor = "red",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "C2") %>% 
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("C3")),
+              fillColor = "red",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "C3") %>% 
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("C4")),
+              fillColor = "red",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "C4") %>% 
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("C5")),
+              fillColor = "red",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "C5") %>% 
+  
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("D1")),
+              fillColor = "red",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "D1") %>% 
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("D2")),
+              fillColor = "red",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "D2") %>% 
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("D3")),
+              fillColor = "red",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "D3") %>% 
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("D4")),
+              fillColor = "red",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "D4") %>% 
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("D5")),
+              fillColor = "red",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "D5") %>% 
+  
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("E1")),
+              fillColor = "red",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "E1") %>% 
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("E2")),
+              fillColor = "red",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "E2") %>% 
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("E3")),
+              fillColor = "red",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "E3") %>% 
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("E4")),
+              fillColor = "red",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "E4") %>% 
+  addPolygons(data = rtp %>% 
+                sf::st_transform(CRS(old.proj)) %>% 
+                filter(climZone%in%c("E5")),
+              fillColor = "red",
+              fillOpacity = opacity,
+              stroke = F,
+              group = "E5") %>% 
+  
+  addPolygons(data = usfs,
+              fill = F,
+              #fillColor = "white",
+              #fillOpacity = 0,
+              stroke = TRUE,
+              color = "forestgreen",
+              weight = 3,
+              popup = ~ADMIN_UNIT,
+              group = "USFS boundaries") %>% 
+  
+  addAwesomeMarkers(data = pila.plts,
+                    #opacity = 1,
+                    lng = ~LON, 
+                    lat=~LAT, 
+                    group = "FIA plots", 
+                    popup= ~paste("Plot CN: ", PLT_CN,
+                                  "<br>Year: ", MEASYEAR,
+                                  "<br>Live PILA: ", live_PILA,
+                                  "<br>Dead PILA: ", dead_PILA,
+                                  "<br>Mean DIA: ", mean_PILA_size,
+                                  "<br>Lat: ", LAT,
+                                  "<br>Long: ", LON,
+                                  "<br>Elev: ", ELEV),
+                    icon = icons
+                    #color = ~pal(live_PILA),
+                    #radius = 8
+  ) %>% 
+  
+  #Legend
+  # addLegend(position = "bottomright",
+  #           colors = c("red","yellow","lightblue","blue","purple"),
+  #           labels = c("A1-E1","A2-E2","A3-E3","A4-E4","A5-E5")) %>% 
+  # layers control
+  addLayersControl(
+    baseGroups = c("OSM (default)", "Lite", "Topo"),
+    overlayGroups = c("FIA plots",
+                      "USFS boundaries",
+                      "A1","A2","A3","A4","A5",
+                      "B1","B2","B3","B4","B5",
+                      "C1","C2","C3","C4","C5",
+                      "D1","D2","D3","D4","D5",
+                      "E1","E2","E3","E4","E5"),
+    options = layersControlOptions(collapsed = FALSE,
+                                   position = "topleft")
+  ) %>% 
+  hideGroup(c("FIA plots",
+              "USFS boundaries",
+              "A1","A2","A3","A4","A5",
+              "B1","B2","B3","B4","B5",
+              "C1","C2","C3","C4","C5",
+              "D1","D2","D3","D4","D5",
+              "E1","E2","E3","E4","E5")) %>% 
+  
+  #OPACITY SLIDER
+  addControl(html = "<input id=\"OpacitySlide\" type=\"range\" min=\"0\" max=\"1\" step=\"0.1\" value=\"0.5\">", position="topright") %>%   # Add Slider
+  htmlwidgets::onRender(
+    "function(el,x,data){
+                     var map = this;
+                     var evthandler = function(e){
+                        var layers = map.layerManager.getVisibleGroups();
+                        console.log('VisibleGroups: ', layers); 
+                        console.log('Target value: ', +e.target.value);
+                        layers.forEach(function(group) {
+                          var layer = map.layerManager._byGroup[group];
+                          console.log('currently processing: ', group);
+                          Object.keys(layer).forEach(function(el){
+                            if(layer[el] instanceof L.Polygon){;
+                            console.log('Change opacity of: ', group, el);
+                             layer[el].setStyle({fillOpacity:+e.target.value});
+                            }
+                          });
+                          
+                        })
+                     };
+              $('#OpacitySlide').mousedown(function () { map.dragging.disable(); });
+              $('#OpacitySlide').mouseup(function () { map.dragging.enable(); });
+              $('#OpacitySlide').on('input', evthandler)}
+          ")
+
+
+
+
+```
+
+# 
+
+------------------------------------------------------------------------
+
+------------------------------------------------------------------------
+
+------------------------------------------------------------------------
+
+# Miscellaneous notes
+
+### Criteria for "call for data"
+
+-   at least 10-15 trees per site
+-   collection after 2015
+-   good locality information (i.e., coordinates)
+-   tree metadata (i.e., DBH, status, etc)
+
+ideally: - reliably cross-dated and measured but we can crossdate and measure in exchange for data
+
+-   Joan Dudney
+-   Phil van Mantgem
+-   Jim Lutz
+-   Eric Nutknap
+-   Steve Voelker
+-   others?
+
+Other filtering features -- - fires (maybe post-hoc to avoid ditching other people's data) - big management areas -
+
+##### HOT DROUGHT is what we're most concerned about
+
+--- persistent seasonal snowpack... is that where we switch from moisture to energy limitation?
