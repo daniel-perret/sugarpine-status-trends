@@ -1,6 +1,9 @@
 # All data files
 data/*
 
+# html knits
+rmd_knits/*
+
 # History files
 .Rhistory
 .Rapp.history
