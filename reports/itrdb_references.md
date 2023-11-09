@@ -1,73 +1,11 @@
----
-title: "ITRDB references for PILA dating"
-author: "D Perret"
-date: "`r Sys.Date()`"
-output: github_document
----
-
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE,
-                      warning = FALSE,
-                      prompt = FALSE,
-                      error = TRUE,
-                      message = FALSE,
-                      cache = FALSE,
-                      cache.lazy = FALSE,
-                      eval = TRUE,
-                      eval.after = "fig.cap")
-
-library(rmarkdown)
-library(tidyverse)
-library(rFIA)
-library(ggplot2)
-library(ggExtra)
-library(rgdal)
-library(sp)
-library(ggsci)
-library(raster)
-library(splines)
-library(lme4)
-library(patchwork)
-library(ade4)
-library(adehabitatHR)
-library(leaflet)
-library(leafem)
-library(htmlwidgets)
-
-
-select <- dplyr::select
-
-theme_set(theme_bw())
-theme_update(text = element_text(size=16, color = "black"),
-             panel.grid.major = element_blank(),
-             panel.grid.minor = element_blank(),
-             strip.background = element_blank(),
-             panel.border=element_rect(size=1.5))
-
-source("/Users/DanielPerret/Box/01. daniel.perret Workspace/PROJECTS/status_trends/growMort_rewrite.R")
-
-
-old.proj <- '+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs'
-
-base.proj <- "+proj=aea +lat_0=23 +lon_0=-96 +lat_1=29.5 +lat_2=45.5 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs"
-
-states <- readOGR(dsn="/Users/DanielPerret/Box/01. daniel.perret Workspace/base_spatialdata/state_boundaries",
-                  layer = "state_boundaries", verbose=F) %>% 
-  spTransform(., CRSobj = CRS(base.proj))
-
-range <- readOGR(dsn="/Users/DanielPerret/Box/01. daniel.perret Workspace/base_spatialdata/named_ranges",
-                 layer = "lambertiana",
-                 verbose = F,
-                 p4s = old.proj) %>% 
-  spTransform(., CRSobj = CRS(base.proj))
-range.buff <- raster::buffer(x=range,width=150000)
-
-```
+ITRDB references for PILA dating
+================
+D Perret
+2023-11-09
 
 ## Sample site map with ITRDB chronologies
 
-```{r}
-
+``` r
 itrdb <- FedData::get_itrdb(species=c("PSME","PILA","TSME","ABCO","ABAM",
                                       "ABMA","CADE","PIPO","PSMA"),label = "thispackagesucks3")
 
@@ -181,3 +119,4 @@ map <- leaflet() %>%
 map
 ```
 
+![](itrdb_references_files/figure-gfm/unnamed-chunk-1-1.png)<!-- -->
