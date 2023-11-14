@@ -144,7 +144,9 @@ all.fia$TREE <- all.fia$TREE %>%
             by=c("TRE_CN"="PREV_TRE_CN")) %>% 
   mutate(SPCD = case_when(SPCD!=LATER_SPCD & !is.na(LATER_SPCD) ~ LATER_SPCD,
                           is.na(LATER_SPCD) ~ SPCD,
-                          TRUE ~ SPCD))
+                          TRUE ~ SPCD),
+         DIA = 2.54*DIA,
+         PREVDIA = 2.54*PREVDIA)
 
 # some summary dataframes for convenience
 pila.trees <- all.fia$TREE %>% 
@@ -267,10 +269,10 @@ pila.rmsr <- pila.trees %>%
 
 ## Only re-run climate processing code if something needs to be changed! It takes forever to run!
 
-clim.norms <- read.csv("clim_norms.csv",header=T,stringsAsFactors=F)
-clim.base <- read.csv("clim_base.csv", header=T, stringsAsFactors=F)
-clim.remper <- read.csv("clim_remper.csv",header=T,stringsAsFactors=F)
-clim.recent <- read.csv("clim_recent.csv",header=T,stringsAsFactors=F)
+clim.norms <- read.csv("data/misc_data/clim_norms.csv",header=T,stringsAsFactors=F)
+clim.base <- read.csv("data/misc_data/clim_base.csv", header=T, stringsAsFactors=F)
+clim.remper <- read.csv("data/misc_data/34clim_remper.csv",header=T,stringsAsFactors=F)
+clim.recent <- read.csv("data/misc_data/34clim_recent.csv",header=T,stringsAsFactors=F)
 
 all.fia$PLOT <- all.fia$PLOT %>% 
   left_join(clim.norms,
@@ -330,6 +332,12 @@ range <- readOGR(dsn="/Users/DanielPerret/Box/01. daniel.perret Workspace/base_s
                  p4s = old.proj) %>% 
   spTransform(., CRSobj = CRS(base.proj))
 
+pila.sp <- pila.plots %>% 
+  SpatialPointsDataFrame(coords = .[,c("LON","LAT")],
+                         data = .,
+                         proj4string = CRS(old.proj)) %>% 
+  spTransform(., CRSobj = CRS(base.proj))
+
 er4 <- readOGR(dsn="/Users/DanielPerret/Box/01. daniel.perret Workspace/base_spatialdata/cleland_usfs_ecoregions",
                layer = "S_USA.EcomapSubsections",
                verbose=F) %>% 
@@ -355,3 +363,552 @@ range.buff <- raster::buffer(x=range,width=30000)
 buff.ext <- extent(range.buff)
 
 ```
+
+### Change estimation
+
+```{r change.code, echo=T}
+
+#evals <- c(41903,61903,321903)
+evals <- c(21903,41903,61903,81903,161903,301903,321903,351903,411903,491903,531903,561903)
+
+
+thresh <- 12.7
+
+## TPA change estimates for all species and all ecoregions
+
+#total tpa change for all species 
+dtpa.er.sp <- all.fia %>% 
+  growMort_dlp.metric(db = .,
+                      stateVar = "TPA",
+                      polys = er4.pila %>% 
+                        select(MAP_UNIT_S,ACRES),
+                      #areaDomain = pila.pres == 1,
+                      grpBy = SPCD,
+                      totals = TRUE,
+                      returnSpatial = T, 
+                      nCores = 4,
+                      sizeThresh=thresh,
+                      evals = evals,
+                      method="TI") %>% 
+  group_by(MAP_UNIT_S) %>% 
+  filter(YEAR==max(YEAR))
+
+#total baa change for all species
+dbaa.er.sp <- all.fia %>% 
+  growMort_dlp.metric(db = .,
+                      stateVar = "BAA",
+                      polys = er4.pila %>%
+                        sf::st_as_sf() %>% 
+                        select(MAP_UNIT_S,ACRES),
+                      #areaDomain = pila.pres == 1,
+                      grpBy = SPCD,
+                      totals = TRUE,
+                      returnSpatial = F, 
+                      nCores = 4,
+                      sizeThresh=thresh,
+                      evals = evals,
+                      method="TI") %>% 
+  group_by(MAP_UNIT_S) %>% 
+  filter(YEAR==max(YEAR))
+
+#combining TPA and BAA change estimates
+dall.er.sp <- left_join(dtpa.er.sp, dbaa.er.sp,
+                        suffix = c(".tpa",".baa"),
+                        by=c("MAP_UNIT_S","ACRES","polyID","SPCD","YEAR","N","nPlots_TREE","nPlots_AREA","AREA_TOTAL_ha")) %>% 
+  mutate(trajectory = case_when(CHNG_PERC.tpa < 0 & CHNG_PERC.baa < 0 ~ "decline",
+                                CHNG_PERC.tpa < 0 & CHNG_PERC.baa >= 0 ~ "development",
+                                CHNG_PERC.tpa >= 0 & CHNG_PERC.baa < 0 ~ "turnover",
+                                CHNG_PERC.tpa >= 0 & CHNG_PERC.baa >= 0 ~ "densification"))
+
+# total agent-specific mortality for all species
+dtpa.er.sp.agent <- all.fia %>% 
+  growMort_dlp.metric(db = .,
+                      stateVar = "TPA",
+                      polys = er4.pila %>%
+                        sf::st_as_sf() %>% 
+                        select(MAP_UNIT_S,ACRES),
+                      totals = TRUE,
+                      grpBy = c(SPCD, agent_key),
+                      returnSpatial = T, 
+                      nCores = 4,
+                      sizeThresh = thresh,
+                      evals = evals,
+                      method="TI") %>% 
+  group_by(MAP_UNIT_S) %>% 
+  filter(YEAR==max(YEAR))
+
+# summarising mortality and estimating recruitment
+mort.decomp.sp <- 
+  dtpa.er.sp %>% 
+  left_join(dtpa.er.sp.agent %>%
+              sf::st_drop_geometry() %>% 
+              group_by(MAP_UNIT_S,SPCD) %>% 
+              summarise(TOT_MORT = sum(CURR_TOTAL-PREV_TOTAL,na.rm=T)*-1,
+                        FIRE_MORT = sum((CURR_TOTAL-PREV_TOTAL)*ifelse(agent_key=="fire",1,0),na.rm=T)*-1,
+                        DISEASE_MORT = sum((CURR_TOTAL-PREV_TOTAL)*ifelse(agent_key=="disease",1,0),na.rm=T)*-1,
+                        INSECT_MORT = sum((CURR_TOTAL-PREV_TOTAL)*ifelse(agent_key=="insect",1,0),na.rm=T)*-1,
+                        ID_MORT = sum((CURR_TOTAL-PREV_TOTAL)*ifelse(agent_key%in%c("insect","disease"),1,0),na.rm=T)*-1),
+            by=c("MAP_UNIT_S","SPCD")) %>%
+  mutate(MORT_TOTAL = ifelse(is.na(MORT_TOTAL),0,MORT_TOTAL),
+         FIRE_MORT = ifelse(is.na(FIRE_MORT),0,FIRE_MORT),
+         INSECT_MORT = ifelse(is.na(INSECT_MORT),0,INSECT_MORT),
+         DISEASE_MORT = ifelse(is.na(DISEASE_MORT),0,DISEASE_MORT),
+         ID_MORT = ifelse(is.na(ID_MORT),0,ID_MORT),
+         CHNG_TPA_TOT = (CURR_TOTAL-PREV_TOTAL)/AREA_TOTAL_ha,
+         CHNG_PERC_tot = (CURR_TOTAL-PREV_TOTAL)/PREV_TOTAL,
+         RECR_est = (CURR_TOTAL-PREV_TOTAL) + MORT_TOTAL,
+         fire.pace = ifelse(FIRE_MORT>RECR_est, "no", "yes"),
+         id.pace = ifelse(ID_MORT > RECR_est, "no", "yes"),
+         other.pace = ifelse(MORT_TOTAL-(FIRE_MORT+ID_MORT) > RECR_est, "no", "yes"),
+         all.pace = ifelse(MORT_TOTAL > RECR_est, "no","yes"),
+         minus.fire = ifelse(MORT_TOTAL-FIRE_MORT > RECR_est, "no", "yes"),
+         minus.id = ifelse(MORT_TOTAL - ID_MORT > RECR_est, "no", "yes")) %>% 
+  left_join(all.fia$PLOT %>% 
+              filter(most.recent=="yes",
+                     !is.na(REMPER)) %>% 
+              select(PLT_CN,ECOSUBCD,MEASYEAR,REMPER) %>% 
+              mutate(REMPER=round(REMPER,0)) %>% 
+              group_by(ECOSUBCD) %>% 
+              summarise(minT1yr = min(MEASYEAR-REMPER),
+                        maxT1yr = max(MEASYEAR-REMPER),
+                        minT2yr = min(MEASYEAR),
+                        maxT2yr = max(MEASYEAR)),
+            by=c("MAP_UNIT_S"="ECOSUBCD"))
+
+# filtering for pila
+mort.decomp.pila <- mort.decomp.sp %>% 
+  filter(SPCD==117,
+         CURR_TOTAL>0 | PREV_TOTAL>0)
+
+
+# summarising for pila-specific rates
+
+dall.er.pila <- dall.er.sp %>% 
+  filter(SPCD == 117) %>% 
+  left_join(dall.er.sp %>% 
+              group_by(MAP_UNIT_S) %>% 
+              summarise(CURR_TPA.all = sum(CURR_TOTAL.tpa),
+                        PREV_TPA.all = sum(PREV_TOTAL.tpa)) %>% 
+              sf::st_drop_geometry()) %>% 
+  filter(PREV_TOTAL.tpa > 0 | CURR_TOTAL.tpa > 0) %>% 
+  left_join(mort.decomp.pila %>% sf::st_drop_geometry())
+
+
+# # This is an old version of the above code that was more complicated than it needed to be
+# #
+# 
+# dall.er.pila <- dall.er.sp %>% 
+#   mutate(sp.indicator = ifelse(SPCD==117, 1, 0)) %>% 
+#   group_by(MAP_UNIT_S) %>%
+#   summarise(CURR_BAA.pila = sum(CURR_TOTAL.baa*sp.indicator),
+#             PREV_BAA.pila = sum(PREV_TOTAL.baa*sp.indicator),
+#             CURR_BAA.all = sum(CURR_TOTAL.baa),
+#             PREV_BAA.all = sum(PREV_TOTAL.baa),
+#             
+#             CURR_TPA.pila = sum(CURR_TOTAL.tpa*sp.indicator),
+#             CURR_TPA.pila.var = sum(CURR_TOTAL_VAR.tpa*sp.indicator),
+#             
+#             PREV_TPA.pila = sum(PREV_TOTAL.tpa*sp.indicator),
+#             PREV_TPA.pila.var = sum(PREV_TOTAL_VAR.tpa*sp.indicator),
+#             
+#             CHNG_TOTAL.tpa.pila = sum(CHNG_TOTAL.tpa*sp.indicator,na.rm=T),
+#             CHNG_TOTAL.tpa.pila.var = sum(CHNG_TOTAL_VAR.tpa*sp.indicator,na.rm=T),
+#             CHNG_PERC.tpa.pila = sum(CHNG_PERC.tpa*sp.indicator,na.rm=T),
+#             CHNG_PERC.tpa.pila.var = sum(CHNG_PERC_VAR.tpa*sp.indicator,na.rm=T),
+#             
+#             CHNG_TOTAL.baa.pila = sum(CHNG_TOTAL.baa*sp.indicator,na.rm=T),
+#             CHNG_TOTAL.baa.pila.var = sum(CHNG_TOTAL_VAR.baa*sp.indicator,na.rm=T),
+#             CHNG_PERC.baa.pila = sum(CHNG_PERC.baa*sp.indicator,na.rm=T),
+#             CHNG_PERC.baa.pila.var = sum(CHNG_PERC_VAR.baa*sp.indicator,na.rm=T),
+#             
+#             CURR_TPA.all = sum(CURR_TOTAL.tpa),
+#             PREV_TPA.all = sum(PREV_TOTAL.tpa),
+#             AREA = mean(AREA_TOTAL_ha))%>% 
+#   mutate(CURR_BAA.prop = CURR_BAA.pila/CURR_BAA.all,
+#          CURR_TPA.prop = CURR_TPA.pila/CURR_TPA.all,
+#          PREV_BAA.prop = PREV_BAA.pila/PREV_BAA.all,
+#          PREV_TPA.prop = PREV_TPA.pila/PREV_TPA.all,
+#          BAA_CHNG_PERC = (CURR_BAA.pila-PREV_BAA.pila)/PREV_BAA.pila,
+#          TPA_CHNG_PERC = (CURR_TPA.pila-PREV_TPA.pila)/PREV_TPA.pila,
+#          
+#          CHNG_PERC.tpa.pila.sd = sqrt(CHNG_PERC.tpa.pila.var),
+#          
+#          BAA_CHNG_PERC.nonpila = ((CURR_BAA.all-CURR_BAA.pila)-(PREV_BAA.all-PREV_BAA.pila))/(PREV_BAA.all-PREV_BAA.pila),
+#          TPA_CHNG_PERC.nonpila = ((CURR_TPA.all-CURR_TPA.pila)-(PREV_TPA.all-PREV_TPA.pila))/(PREV_TPA.all-PREV_TPA.pila),
+#          BAA_CHNG_PERC.all = (CURR_BAA.all-PREV_BAA.all)/PREV_BAA.all,
+#          TPA_CHNG_PERC.all = (CURR_TPA.all-PREV_TPA.all)/PREV_TPA.all,
+#          quadrant.baa = case_when(BAA_CHNG_PERC < 0 & BAA_CHNG_PERC.nonpila < 0 ~ 1,
+#                                   BAA_CHNG_PERC < 0 & BAA_CHNG_PERC.nonpila >= 0 ~ 2,
+#                                   BAA_CHNG_PERC >= 0 & BAA_CHNG_PERC.nonpila >= 0 ~ 3,
+#                                   BAA_CHNG_PERC >= 0 & BAA_CHNG_PERC.nonpila < 0 ~ 4),
+#          quadrant.tpa = case_when(TPA_CHNG_PERC < 0 & TPA_CHNG_PERC.nonpila < 0 ~ 1,
+#                                   TPA_CHNG_PERC < 0 & TPA_CHNG_PERC.nonpila >= 0 ~ 2,
+#                                   TPA_CHNG_PERC >= 0 & TPA_CHNG_PERC.nonpila >= 0 ~ 3,
+#                                   TPA_CHNG_PERC >= 0 & TPA_CHNG_PERC.nonpila < 0 ~ 4)) %>% 
+#   filter(PREV_TPA.pila > 0 | CURR_TPA.pila > 0) %>% 
+#   left_join(mort.decomp.pila %>% sf::st_drop_geometry())
+
+```
+
+### Change maps {.tabset .tabset-pills}
+
+These maps show population trends between 2000-2009 and 2010-2019 inventories for all sugar pine greater than 12.7 cm DBH -- these will be broken out by size classes later.
+
+####Basal area
+```{r}
+
+mapcolor <- "wheat3"
+linecolor <- "gray40"
+pointcolor <- "firebrick2"
+
+
+ggplot() +
+  geom_sf(data = cont %>% 
+            as(.,"sf"),
+          col=linecolor,
+          fill = mapcolor) + 
+  geom_sf(data = states %>% 
+            as(.,"sf"),
+          fill=NA,
+          col=linecolor) +
+  geom_sf(data=dall.er.pila %>% 
+            filter(!is.na(CHNG_PERC.tpa)),
+          col=NA,
+          aes(fill = CHNG_PERC.baa))+
+  geom_sf(data = states %>% 
+            as(.,"sf"),
+          fill=NA,
+          col=linecolor,
+          lty=2) +
+  theme(panel.background = element_rect(fill="skyblue1")) +
+  lims(x = c(-2.75e6, -1.25e6),
+       y = c(1.25e6,3e6)) +
+  scale_fill_steps2(name = "PILA % change \n(basal area)",
+                    na.value=NA,
+                    low = "firebrick3",
+                    mid="white",
+                    midpoint=0,
+                    high = "darkblue",
+                    limits = c(-100,100),
+                    n.breaks = 9)
+
+
+
+```
+
+####Stem density
+```{r}
+
+mapcolor <- "wheat3"
+linecolor <- "gray40"
+pointcolor <- "firebrick2"
+
+
+ggplot() +
+  geom_sf(data = cont %>% 
+            as(.,"sf"),
+          col=linecolor,
+          fill = mapcolor) + 
+  geom_sf(data = states %>% 
+            as(.,"sf"),
+          fill=NA,
+          col=linecolor) +
+  geom_sf(data=dall.er.pila %>% 
+            filter(!is.na(CHNG_PERC.tpa)),
+          col=NA,
+          aes(fill = CHNG_PERC.tpa))+
+  geom_sf(data = states %>% 
+            as(.,"sf"),
+          fill=NA,
+          col=linecolor,
+          lty=2) +
+  theme(panel.background = element_rect(fill="skyblue1")) +
+  lims(x = c(-2.75e6, -1.25e6),
+       y = c(1.25e6,3e6)) +
+  scale_fill_steps2(name = "PILA % change \n(stem density)",
+                    na.value=NA,
+                    low = "firebrick3",
+                    mid="white",
+                    midpoint=0,
+                    high = "darkblue",
+                    limits = c(-100,100),
+                    n.breaks = 9)
+
+```
+
+####Trajectory category
+
+This is the same categorization as I use in the subalpine fir-Engelmann spruce coexistence work; declines in both stem density and basal area indicate general *decline*, while increases in both indicate *densification*. Increasing stem density and decreasing basal area indicates *turnover* and decreasing stem density and increasing basal area indicate *development*.
+
+```{r}
+
+ggplot() +
+  geom_sf(data = cont %>% 
+            as(.,"sf"),
+          col=linecolor,
+          fill = mapcolor,
+          lwd=0.3) +  
+  geom_sf(data = states %>% 
+            as(.,"sf"),
+          fill=NA,
+          col=linecolor) +
+  geom_sf(data = dall.er.pila,
+          col = linecolor,
+          fill = NA)+
+  geom_sf(data = dall.er.pila,
+          col=NA,
+          aes(fill = factor(trajectory))) +
+  geom_sf(data = states %>% 
+            as(.,"sf"),
+          col=linecolor,
+          fill=NA,
+          lty=2) +
+  scale_fill_manual(name = "population trajectory",
+                    values = c("densification" = "dodgerblue2",
+                               "development" = "gold2",
+                               "turnover" = "firebrick2",
+                               "decline" = "firebrick4"),
+                    aesthetics = c("col","fill"))+
+  lims(x = c(-2.75e6, -1.25e6),
+       y = c(1.25e6,3e6)) +
+  theme(legend.position="right",
+        panel.background = element_rect(fill="skyblue1"))
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### Tree size 
+
+#### Live/dead size distribution (currrent) {.tabset .tabset-pills}
+
+##### stems
+```{r}
+
+all.fia$TREE$newSize <- makeClasses(all.fia$TREE$DIA, interval = 15, numLabs=T, lower = 12.7)
+all.fia$TREE <- mutate(all.fia$TREE,
+                       newSize = ifelse(newSize > 150, 150, newSize))
+
+tpasize.all <-  all.fia %>% 
+  clipFIA(.,
+          mostRecent=T) %>% 
+  tpa(.,
+      grpBy = c(STATUSCD,newSize),
+      treeDomain = SPCD==117,
+      totals = TRUE,
+      treeType = "all",
+      variance = T) %>% 
+  mutate(TREE_TOTAL_SD = sqrt(TREE_TOTAL_VAR),
+         BA_TOTAL_SD = sqrt(BA_TOTAL_VAR),
+         status = ifelse(STATUSCD==1,"alive","dead"))
+
+tpasize.all %>%
+  #mutate(newSize = ifelse(newSize == "[5,10)","[05,10)",newSize)) %>% 
+  ggplot(.,
+         aes(x = factor(newSize),
+             y = TREE_TOTAL/1e6,
+             group = status)) +
+  geom_col(position=position_dodge(0.9),
+           col="black",
+           fill="firebrick2",
+           aes(alpha=status)) +
+  geom_errorbar(aes(ymin = (TREE_TOTAL - (TREE_TOTAL_SD*1.96))/1e6,
+                    ymax = (TREE_TOTAL + (TREE_TOTAL_SD*1.96))/1e6),
+                position=position_dodge(0.9),
+                width=0.3,
+                lwd=0.9)+
+  labs(x = "Size class (15 cm bin min)") +
+  theme(axis.text.x = element_text(angle=45,hjust=1,size=15),
+        legend.key.size = unit(1,"cm"),
+        strip.text.x=element_blank()) +
+  scale_y_continuous(labels = scales::comma,
+                     name = "Number of trees (millions)") +
+  scale_alpha_manual(values = c("alive" = 1,
+                                "dead" = 0.3))
+
+```
+#### basal area
+```{r}
+
+tpasize.all %>%
+  #mutate(newSize = ifelse(newSize == "[5,10)","[05,10)",newSize)) %>% 
+  ggplot(.,
+         aes(x = factor(newSize),
+             y = BA_TOTAL/1e6,
+             group = status)) +
+  geom_col(position=position_dodge(0.9),
+           col="black",
+           fill="firebrick2",
+           aes(alpha=status)) +
+  geom_errorbar(aes(ymin = (BA_TOTAL - (BA_TOTAL_SD*1.96))/1e6,
+                    ymax = (BA_TOTAL + (BA_TOTAL_SD*1.96))/1e6),
+                position=position_dodge(0.9),
+                width=0.3,
+                lwd=0.9)+
+  labs(x = "Size class (15 cm bin min)") +
+  theme(axis.text.x = element_text(angle=45,hjust=1,size=15),
+        legend.key.size = unit(1,"cm"),
+        strip.text.x=element_blank()) +
+  scale_y_continuous(labels = scales::comma,
+                     name = "Basal area") +
+  scale_alpha_manual(values = c("alive" = 1,
+                                "dead" = 0.3))
+
+```
+
+
+#### Live/dead ratios (T1 vs T2) -- WORKING
+
+#### Mortality rate {.tabset .tabset-pills}
+
+##### stems
+```{r}
+
+sizetpa <- growMort_dlp.metric(db = all.fia,
+                               stateVar = "TPA",
+                               returnSpatial = FALSE,
+                               grpBy = c(newSize),
+                               totals = TRUE,
+                               treeDomain = SPCD == 117,
+                               sizeThresh = thresh,
+                               nCores = 4,
+                               evals = evals,
+                               method = "TI") %>% 
+  group_by(newSize) %>% 
+  filter(YEAR==max(YEAR))
+
+sizetpa %>% 
+  # select(newSize, STATUSCD, PREV_TOTAL, CURR_TOTAL, PREV_TOTAL_SE, CURR_TOTAL_SE) %>% 
+  # pivot_wider(names_from = c(STATUSCD),
+  #             values_from = c(PREV_TOTAL,CURR_TOTAL,PREV_TOTAL_SE,CURR_TOTAL_SE)) %>% 
+  ggplot(.,aes(x = (newSize),
+               y = MORT_PERC)) +
+  geom_line(col = "black",
+            lwd=1)+ 
+  geom_point(aes(size = MORT_TOTAL/1e6),
+             pch = 19,
+             alpha = 0.8) +
+  geom_errorbar(aes(ymin = (MORT_PERC - MORT_PERC_SE),
+                    ymax = (MORT_PERC + MORT_PERC_SE)),
+                width = 3) +
+  labs(x = "Size class (15 cm bin min)",
+       y = "Percent mortality (stems)") +
+  scale_size_continuous(name = "Total mortality (millions)",
+                        range = c(1,10))
+```
+
+
+##### basal area
+
+-- note: something is wrong here. consider digging back into the growMort code to make sure that basal area conversion is handled correctly. it might have something to do with the time of selection rule and calculating percent mortality.
+
+```{r}
+
+sizebaa <- growMort_dlp.metric(db = all.fia,
+                               stateVar = "BAA",
+                               returnSpatial = FALSE,
+                               grpBy = c(newSize),
+                               totals = TRUE,
+                               treeDomain = SPCD == 117,
+                               sizeThresh = thresh,
+                               nCores = 4,
+                               evals = evals,
+                               method = "TI") %>% 
+  group_by(newSize) %>% 
+  filter(YEAR==max(YEAR))
+
+sizebaa %>% 
+  # select(newSize, STATUSCD, PREV_TOTAL, CURR_TOTAL, PREV_TOTAL_SE, CURR_TOTAL_SE) %>% 
+  # pivot_wider(names_from = c(STATUSCD),
+  #             values_from = c(PREV_TOTAL,CURR_TOTAL,PREV_TOTAL_SE,CURR_TOTAL_SE)) %>% 
+  ggplot(.,aes(x = factor(newSize),
+               y = MORT_PERC)) +
+  geom_line(col = "black",
+            lwd=1)+ 
+  geom_point(aes(size = MORT_TOTAL),
+             pch = 19,
+             alpha = 0.8) +
+  geom_errorbar(aes(ymin = (MORT_PERC - MORT_PERC_SE),
+                    ymax = (MORT_PERC + MORT_PERC_SE)),
+                width = 0.3) +
+  labs(x = "Size class (15 cm bin min)",
+       y = "Percent mortality (basal area)") +
+  scale_size_continuous(name = "Total mortality \n(basal area)",
+                        range = c(1,10))
+
+```
+
+#### Mortality agents
+
+```{r}
+
+agents <- all.fia %>% 
+  growMort_dlp.metric(db = .,
+                      stateVar = "TPA",
+                      treeDomain = SPCD == 117,
+                      totals = TRUE,
+                      grpBy = c(newSize,agent_key),
+                      returnSpatial = F, 
+                      nCores = 4,
+                      sizeThresh = thresh,
+                      evals = evals,
+                      method="TI") %>% 
+  filter(agent_key!="unknown2") %>% 
+  mutate(PREV_TOTAL_SD = sqrt(PREV_TOTAL_VAR)) %>% 
+  mutate(agent_key = ifelse(agent_key=="unknown1","unknown",agent_key))
+
+
+agents %>% 
+  #mutate(newSize = ifelse(newSize == "[5,20)","[05,20)",newSize)) %>% 
+  filter(YEAR==2019) %>% 
+  ggplot(.,
+         aes(x = factor(newSize),
+             y = PREV_TOTAL,
+             fill = agent_key)) +
+  geom_bar(position = "fill",
+           stat = "identity") +
+  scale_fill_jama(name = "Mortality agent") +
+  labs(x = "DBH size class",
+       y = "Proportion") +
+  theme(axis.text.x = element_text(angle=45,hjust=1))
+
+
+
+```
+
+
+
