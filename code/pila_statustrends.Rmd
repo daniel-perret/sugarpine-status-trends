@@ -719,15 +719,22 @@ ggplot() +
 ##### stems
 ```{r}
 
-all.fia$TREE$newSize <- makeClasses(all.fia$TREE$DIA, interval = 15, numLabs=T, lower = 12.7)
+all.fia$TREE$CurrSizeClass <- makeClasses(all.fia$TREE$DIA, 
+                                          interval = 15, numLabs=T, lower = 12.7)
+
+all.fia$TREE$PrevSizeClass <- makeClasses(all.fia$TREE$PREVDIA, 
+                                          interval = 15, numLabs=T, lower = 12.7)
+
 all.fia$TREE <- mutate(all.fia$TREE,
-                       newSize = ifelse(newSize > 150, 150, newSize))
+                       CurrSizeClass = ifelse(CurrSizeClass > 150, 150, CurrSizeClass),
+                       PrevSizeClass = ifelse(PrevSizeClass > 150, 150, PrevSizeClass))
+
 
 tpasize.all <-  all.fia %>% 
   clipFIA(.,
           mostRecent=T) %>% 
   tpa(.,
-      grpBy = c(STATUSCD,newSize),
+      grpBy = c(STATUSCD,PrevSizeClass),
       treeDomain = SPCD==117,
       totals = TRUE,
       treeType = "all",
@@ -739,7 +746,7 @@ tpasize.all <-  all.fia %>%
 tpasize.all %>%
   #mutate(newSize = ifelse(newSize == "[5,10)","[05,10)",newSize)) %>% 
   ggplot(.,
-         aes(x = factor(newSize),
+         aes(x = factor(CurrSizeClass),
              y = TREE_TOTAL/1e6,
              group = status)) +
   geom_col(position=position_dodge(0.9),
@@ -767,7 +774,7 @@ tpasize.all %>%
 tpasize.all %>%
   #mutate(newSize = ifelse(newSize == "[5,10)","[05,10)",newSize)) %>% 
   ggplot(.,
-         aes(x = factor(newSize),
+         aes(x = factor(CurrSizeClass),
              y = BA_TOTAL/1e6,
              group = status)) +
   geom_col(position=position_dodge(0.9),
@@ -801,21 +808,21 @@ tpasize.all %>%
 sizetpa <- growMort_dlp.metric(db = all.fia,
                                stateVar = "TPA",
                                returnSpatial = FALSE,
-                               grpBy = c(newSize),
+                               grpBy = c(PrevSizeClass),
                                totals = TRUE,
                                treeDomain = SPCD == 117,
                                sizeThresh = thresh,
                                nCores = 4,
                                evals = evals,
                                method = "TI") %>% 
-  group_by(newSize) %>% 
+  group_by(PrevSizeClass) %>% 
   filter(YEAR==max(YEAR))
 
 sizetpa %>% 
   # select(newSize, STATUSCD, PREV_TOTAL, CURR_TOTAL, PREV_TOTAL_SE, CURR_TOTAL_SE) %>% 
   # pivot_wider(names_from = c(STATUSCD),
   #             values_from = c(PREV_TOTAL,CURR_TOTAL,PREV_TOTAL_SE,CURR_TOTAL_SE)) %>% 
-  ggplot(.,aes(x = (newSize),
+  ggplot(.,aes(x = (PrevSizeClass),
                y = MORT_PERC)) +
   geom_line(col = "black",
             lwd=1)+ 
@@ -838,24 +845,25 @@ sizetpa %>%
 
 ```{r}
 
-sizebaa <- growMort_dlp.metric(db = all.fia,
+sizebaa <- growMort_dlp.metric(db = all.fia %>% 
+                                 clipFIA(.,mostRecent=T),
                                stateVar = "BAA",
                                returnSpatial = FALSE,
-                               grpBy = c(newSize),
+                               grpBy = c(PrevSizeClass),
                                totals = TRUE,
                                treeDomain = SPCD == 117,
                                sizeThresh = thresh,
                                nCores = 4,
                                evals = evals,
                                method = "TI") %>% 
-  group_by(newSize) %>% 
+  group_by(PrevSizeClass) %>% 
   filter(YEAR==max(YEAR))
 
 sizebaa %>% 
   # select(newSize, STATUSCD, PREV_TOTAL, CURR_TOTAL, PREV_TOTAL_SE, CURR_TOTAL_SE) %>% 
   # pivot_wider(names_from = c(STATUSCD),
   #             values_from = c(PREV_TOTAL,CURR_TOTAL,PREV_TOTAL_SE,CURR_TOTAL_SE)) %>% 
-  ggplot(.,aes(x = factor(newSize),
+  ggplot(.,aes(x = (PrevSizeClass),
                y = MORT_PERC)) +
   geom_line(col = "black",
             lwd=1)+ 
@@ -864,7 +872,7 @@ sizebaa %>%
              alpha = 0.8) +
   geom_errorbar(aes(ymin = (MORT_PERC - MORT_PERC_SE),
                     ymax = (MORT_PERC + MORT_PERC_SE)),
-                width = 0.3) +
+                width = 3) +
   labs(x = "Size class (15 cm bin min)",
        y = "Percent mortality (basal area)") +
   scale_size_continuous(name = "Total mortality \n(basal area)",
@@ -877,6 +885,8 @@ sizebaa %>%
 ```{r}
 
 agents <- all.fia %>% 
+  clipFIA(.,
+          mostRecent=T) %>% 
   growMort_dlp.metric(db = .,
                       stateVar = "TPA",
                       treeDomain = SPCD == 117,

@@ -1,4 +1,4 @@
-core <- read.csv("FIELD_DATA/S123_092823_CSV/tree_data_092823.csv") %>% 
+core <- read.csv("data/FIELD_DATA/S123_010924_CSV/tree_data_010924.csv") %>% 
   select(Core.ID,
          Site.ID,
          Tree.ID,
@@ -11,17 +11,30 @@ core <- read.csv("FIELD_DATA/S123_092823_CSV/tree_data_092823.csv") %>%
          Dead.BA = Dead.basal.area..neighborhood.,
          Core.height = Coring.height..cm.,
          DIA = DCH..cm.,
-         Comment = Additional.comment,
-         Recorder = )
+         Comment = Additional.comment) %>% 
+  bind_rows(read.csv("data/FIELD_DATA/S123_PEFsite_CSV/tree_data_1.csv") %>% 
+              select(Core.ID,
+                     Site.ID,
+                     Tree.ID,
+                     Crown.vigor,
+                     Canopy.position,
+                     Cones,
+                     Blister.rust,
+                     Bark.beetles,
+                     Live.BA = Live.basal.area..neighborhood.,
+                     Dead.BA = Dead.basal.area..neighborhood.,
+                     Core.height = Coring.height..cm.,
+                     DIA = DCH..cm.,
+                     Comment = Additional.comment))
 
-emlid <- read.csv("FIELD_DATA/emlid_092523.csv") %>% 
-  select(Core.ID = Tree,
+emlid <- read.csv("data/FIELD_DATA/emlid_101623.csv") %>% 
+  select(Core.ID = Core,
          LON = Longitude,
          LAT = Latitude,
          Lateral.RMS, 
          NSamples = Samples)
 
-sites <- read.csv("FIELD_DATA/S123_092823_CSV/site_data_092823.csv", header=T) %>% 
+sites <- read.csv("data/FIELD_DATA/S123_010924_CSV/site_data_010924.csv", header=T) %>% 
   select(Site.ID,
          Niche.zone,
          State,
@@ -53,8 +66,8 @@ sites <- sites %>%
               select(Site.ID, contains("calc")) %>% 
               distinct())
 
-write.csv(all.dat, file = "FIELD_DATA/core_data_complete_092523.csv", row.names = F)
-write.csv(sites, file = "FIELD_DATA/site_data_complete_092523.csv", row.names = F)
+write.csv(all.dat, file = "data/FIELD_DATA/core_data_complete_010924.csv", row.names = F)
+write.csv(sites, file = "data/FIELD_DATA/site_data_complete_010924.csv", row.names = F)
 
 
 
