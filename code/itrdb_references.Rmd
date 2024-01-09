@@ -80,14 +80,14 @@ spat.itrdb <- itrdb$metadata %>%
 spat.itrdb$x <- spat.itrdb@coords[,1]
 spat.itrdb$y <- spat.itrdb@coords[,2]
 
-done.sites <- read.csv("/Users/DanielPerret/Box/01. daniel.perret Workspace/PROJECTS/sugarpine-status-trends/data/FIELD_DATA/S123_092823_CSV/site_data_092823.csv", header=T) %>% 
+done.sites <- read.csv("/Users/DanielPerret/Box/01. daniel.perret Workspace/PROJECTS/sugarpine-status-trends/data/FIELD_DATA/site_data_complete_010924.csv", header=T) %>% 
   select(SITEID = Site.ID,
          ZONE = Niche.zone,
          STATE = State,
-         LON = x,
-         LAT = y,
+         LON = SITE.LON.calc,
+         LAT = SITE.LAT.calc,
          FOREST = National.Forest,
-         Site.Locality, Tree.Number, Name, Date)
+         Site.Locality, Tree.Number, Recorder, Date)
 
 spat.sites <- done.sites %>% 
   SpatialPointsDataFrame(coords = .[,c("LON","LAT")],
@@ -174,9 +174,9 @@ map <- leaflet() %>%
   hideGroup(c("ITRDB chrons (PIPO)","ITRDB chrons (other)"))
 
 
-# saveWidget(widget = map,
-#            file = "PILAsites_itrdbchrons.html",
-#            selfcontained = TRUE)
+saveWidget(widget = map,
+           file = "PILAsites_itrdbchrons_9Jan24.html",
+           selfcontained = TRUE)
 
 map
 ```
