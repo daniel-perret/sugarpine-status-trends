@@ -65,7 +65,7 @@ theme_update(text = element_text(size=16, color = "black"),
              strip.background = element_blank(),
              panel.border=element_rect(size=1.5))
 
-source("/Users/DanielPerret/Box/01. daniel.perret Workspace/PROJECTS/status_trends/growMort_rewrite_METRIC.R")
+source("code/growMort_rewrite_METRIC.R")
 ```
 
 ## Introduction/contrext
@@ -165,8 +165,7 @@ plot.summary <- all.fia$TREE %>%
   ) %>%
   mutate(focal = ifelse(SPCD == "117", "pila", "nonpila"),
          status = ifelse(STATUSCD == 1, "live","dead"),
-         DIAcm = DIA*2.54,
-         BAcm = pi*(DIAcm/2)^2,
+         BAcm = pi*(DIA/2)^2,
          BAcm.pa = BAcm*TPA_UNADJ) %>% 
   group_by(PLT_CN, focal, status) %>% 
   summarise(BAcm = sum(BAcm,na.rm=T),

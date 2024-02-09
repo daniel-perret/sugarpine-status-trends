@@ -1,0 +1,82 @@
+---
+title: "dating_check_dplR"
+output: html_document
+description: this document is used for performing checking for dating and measurement errors within site rwl collections
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplR)
+library(dplyr)
+library(tidyr)
+```
+
+Steps:
+
+# 1) Generate a rwl collection for a site
+
+Do this in CDendro -- make an empty collection, add all the series from the collection (making sure to check the core inventory document for notes on specific series), and export it as an rwl. Modify the code  below to make it the path to the rwl:
+
+```{r}
+rwl.path <- "/Users/dperret/Dropbox (Brown)/core_measurements/rwl/pico_a5r1.rwl"
+init.rwl <- read.rwl(rwl.path)
+init.rwl <- init.rwl[row.names(init.rwl) %in% 1895:2015,]
+rwl.report(init.rwl)
+
+```
+
+
+# 3) initial summaries
+
+this is to get a general sense for what the site chronologies and series look like.
+
+
+```{r}
+rwl.report(init.rwl)
+
+summary.rwl(init.rwl)
+
+mean(interseries.cor(init.rwl)[,1])
+interseries.cor(init.rwl)
+
+spag.plot(init.rwl)
+
+```
+
+# 4) segment corr plot
+
+does a "leave one out" correlation procedure for each series in segments, with a lag equal to half the segment length
+
+```{r}
+seg <- 14 # change depending on length of series
+c <- corr.rwl.seg(init.rwl, seg.length = seg, bin.floor = 0)
+
+c$flags
+#make a list of series that have >2 red segments in a row
+
+```
+
+# 5) now we go series-by-series, and try to find dating problems if they exist
+
+```{r}
+series <- "b2r1_9a" #series by series
+
+corr.series.seg(init.rwl, series=series, # use this to try to find where it goes bad
+                seg.length=10, bin.floor = 10)
+
+window <- 1900:2018 # change depending on where it goes bad
+
+ccf.series.rwl(rwl=init.rwl[row.names(init.rwl) %in% window,], 
+               series = series, seg.length = 10,
+               bin.floor=10)
+
+series.rwl.plot(init.rwl,series, seg.length=10, bin.floor=0)
+
+xskel.ccf.plot(init.rwl, series=series,
+               win.start=1990, win.width = 20)
+
+```
+
+....and then I guess go to the wood and the images/measurements to see if you can figure it out!
+
+....then go through the whole thing again and see if it's better?
