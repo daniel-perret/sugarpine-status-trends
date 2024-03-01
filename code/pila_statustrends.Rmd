@@ -270,8 +270,8 @@ pila.rmsr <- pila.trees %>%
 
 clim.norms <- read.csv("data/misc_data/clim_norms.csv",header=T,stringsAsFactors=F)
 clim.base <- read.csv("data/misc_data/clim_base.csv", header=T, stringsAsFactors=F)
-clim.remper <- read.csv("data/misc_data/34clim_remper.csv",header=T,stringsAsFactors=F)
-clim.recent <- read.csv("data/misc_data/34clim_recent.csv",header=T,stringsAsFactors=F)
+clim.remper <- read.csv("data/misc_data/clim_remper.csv",header=T,stringsAsFactors=F)
+clim.recent <- read.csv("data/misc_data/clim_recent.csv",header=T,stringsAsFactors=F)
 
 all.fia$PLOT <- all.fia$PLOT %>% 
   left_join(clim.norms,
@@ -360,6 +360,9 @@ pila.sp <- pila.sp %>% sf::st_as_sf()
 
 range.buff <- raster::buffer(x=range,width=30000)
 buff.ext <- extent(range.buff)
+
+
+
 
 ```
 

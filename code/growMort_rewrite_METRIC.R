@@ -683,7 +683,7 @@ growMortStarter_dlp.metric <- function(x,
       as.data.frame() %>%
       dplyr::select(PLT_CN, #TRE_CN, REMPER, 
                     #Added 2/8 for rFIA/PILA troubleshooting
-                    reCOMPONENT, TRE_CN, PREV_TRE_CN,DIA, PREVDIA, RECONCILECD,
+                    #reCOMPONENT, TRE_CN, PREV_TRE_CN,DIA, PREVDIA, RECONCILECD,
                     
                     TREE_BASIS, SUBP, TREE, !!!grpSyms, rPlot:gPlot)#, contains("UNADJ"),tDI,REMPER)
     
@@ -716,7 +716,7 @@ growMortStarter_dlp.metric <- function(x,
                       !!!grpSyms, CONDID, SUBP, TREE,
                       #REMPER,
                       #Added 2/8 for rFIA/PILA troubleshooting
-                      reCOMPONENT, TRE_CN, PREV_TRE_CN,DIA, PREVDIA, RECONCILECD,
+                      #reCOMPONENT, TRE_CN, PREV_TRE_CN,DIA, PREVDIA, RECONCILECD,
                       RECR_TPA = rPlot,
                       MORT_TPA = mPlot,
                       REMV_TPA = hPlot,
